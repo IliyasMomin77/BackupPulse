@@ -2,7 +2,7 @@
 
 Ask plain-English questions about your Veeam backup estate. Get instant answers from all VBR servers in one place.
 
-> **Privacy-first:** Runs 100% locally with LM Studio. No data leaves your network.
+> **Flexible by design:** Works with any LLM — local (LM Studio, Ollama) or cloud (Groq, OpenRouter, Gemini, OpenAI). Switch providers live from the UI without restarting.
 
 ---
 
