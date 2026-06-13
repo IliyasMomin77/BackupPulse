@@ -355,6 +355,12 @@ Real data. Multi-user. Air-gapped AI. All inside your network.
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
 
+**Why PostgreSQL sits between Veeam and the LLM:**
+- The LLM never has direct access to production Veeam databases
+- Raw Veeam data is pulled into clean, well-structured PostgreSQL tables — the LLM queries those
+- If a query goes wrong, worst case is a bad SELECT on the reporting DB, not the production system
+- As LLMs improve at handling raw data, the PostgreSQL middle layer can be removed — but for now it adds isolation and data quality
+
 ---
 
 ### Demo vs Production — Side by Side
