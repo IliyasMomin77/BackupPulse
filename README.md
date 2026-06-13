@@ -310,7 +310,6 @@ health report
 | PostgreSQL schema | ✅ `db_setup.py` |
 | Sync agent (VBR → PostgreSQL) | ⚠️ Not included — environment-specific |
 | Authentication layer | ⚠️ Not included |
-| Read-only DB user (`veeam_bot`) | ✅ Done |
 
 ---
 
