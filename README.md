@@ -224,7 +224,7 @@ Real data. Multi-user. Air-gapped AI. All inside your network.
 | Auth | None | Reverse proxy + Windows Auth |
 | LLM | LM Studio phi-4-mini (local) or Groq free | LM Studio (air-gapped, larger model) |
 | Hardware | Laptop | Dedicated VM |
-| DB user | postgres | Read-only `backuppulse_ro` |
+| DB user | veeam_bot (read-only) | veeam_bot (read-only) |
 | Port | localhost:5000 | Internal network, optionally behind nginx |
 
 ---
@@ -310,7 +310,7 @@ health report
 | PostgreSQL schema | ✅ `db_setup.py` |
 | Sync agent (VBR → PostgreSQL) | ⚠️ Not included — environment-specific |
 | Authentication layer | ⚠️ Not included |
-| Read-only DB user | ⚠️ Manual step |
+| Read-only DB user (`veeam_bot`) | ✅ Done |
 
 ---
 
