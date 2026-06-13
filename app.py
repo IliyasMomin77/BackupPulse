@@ -445,6 +445,10 @@ def process_question(question):
                 reply = sql_clean[7:].strip()
                 log.info(f"[CHAT] DIRECT answer — {round(time.perf_counter()-t0,3)}s")
 
+        if not reply and not raw_sql:
+            reply = "The AI did not return a response. Please try again."
+            log.warning("[CHAT] LLM returned None/empty for SQL generation")
+
         if not reply:
             # Strip markdown fences and extract the SELECT statement
             sql = re.sub(r"```sql|```", "", raw_sql).strip()
