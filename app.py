@@ -194,8 +194,12 @@ def _load_file(filename, fallback=""):
     return fallback
 
 _LOCAL_PROVIDERS = {"lmstudio", "ollama"}
-_SYSTEM_PROMPT = _load_file("system_prompt.txt", "You are VeeamBot, a Veeam Backup expert. Speak naturally.")
-_SQL_PROMPT    = _load_file("sql_prompt.txt",    "Generate a PostgreSQL SELECT query. Return SQL only.")
+if MODEL_PROVIDER in _LOCAL_PROVIDERS:
+    _SYSTEM_PROMPT = _load_file("system_prompt_local.txt", "You are a Veeam backup assistant. Explain the results clearly.")
+    _SQL_PROMPT    = _load_file("sql_prompt_local.txt",    "Return a PostgreSQL SELECT query only. No explanation.")
+else:
+    _SYSTEM_PROMPT = _load_file("system_prompt.txt", "You are VeeamBot, a Veeam Backup expert. Speak naturally.")
+    _SQL_PROMPT    = _load_file("sql_prompt.txt",    "Generate a PostgreSQL SELECT query. Return SQL only.")
 
 def load_system_prompt(): return _SYSTEM_PROMPT
 def load_sql_prompt():    return _SQL_PROMPT
@@ -302,41 +306,70 @@ _INSTANT_REPLY = re.compile(
 )
 
 def _format_rows(question, rows):
-    """Format query results as plain text — used for local models that can't explain."""
+    """Format query results as plain text for local models (no second LLM call)."""
     if not rows:
         return "No records found."
     keys = list(rows[0].keys())
-    q = question.lower()
 
     # Failed jobs — group by vbr_server → job_name
-    if any(k in keys for k in ("failed_object_name", "vbr_server")):
+    if "failed_object_name" in keys:
         from collections import defaultdict
-        grouped = defaultdict(lambda: defaultdict(dict))
+        grouped = defaultdict(lambda: defaultdict(list))
         for r in rows[:60]:
-            srv  = r.get("vbr_server", "Unknown")
-            job  = r.get("job_name", "Unknown")
-            obj  = r.get("failed_object_name", "Unknown")
-            obj_type = r.get("object_type", "")
-            label = f"{obj}" + (f" ({obj_type})" if obj_type else "")
-            grouped[srv][job][obj] = label
-        total = sum(len(objs) for srv in grouped.values() for objs in srv.values())
-        lines = [f"**{total} failed backup(s) in the last 24 hours:**\n"]
+            srv, job, obj = r.get("vbr_server","?"), r.get("job_name","?"), r.get("failed_object_name","?")
+            otype = r.get("object_type", "")
+            label = f"{obj}" + (f" ({otype})" if otype else "")
+            if label not in grouped[srv][job]:
+                grouped[srv][job].append(label)
+        total = sum(len(o) for s in grouped.values() for o in s.values())
+        lines = [f"**{total} failed backup(s):**\n"]
         for srv, jobs in grouped.items():
             lines.append(f"**{srv}**")
             for job, objs in jobs.items():
                 lines.append(f"  • {job}")
                 for o in objs:
-                    lines.append(f"    – {o}")
+                    lines.append(f"    – {o} ❌")
         lines.append("\nReview and retry failed jobs or check the affected servers.")
         return "\n".join(lines)
 
-    # Single object detail (protected_vms)
-    if "last_successful_backup" in keys and len(rows) == 1:
+    # Long-running jobs
+    if "duration_hours" in keys:
+        lines = ["**Long-running jobs:**"]
+        for r in rows:
+            alert = r.get("alert_level", "")
+            flag = " 🔴" if alert == "Critical" else " ⚠️"
+            lines.append(f"  • **{r.get('job_name')}** on {r.get('vbr_server')} — "
+                         f"{r.get('duration_hours')}h{flag}")
+        return "\n".join(lines)
+
+    # Job sessions
+    if "status" in keys and "duration_minutes" in keys:
+        from collections import Counter
+        counts = Counter(r.get("status") for r in rows)
+        lines = [f"**{len(rows)} job session(s):**",
+                 f"  ✅ Success: {counts.get('Success',0)}  "
+                 f"⚠️ Warning: {counts.get('Warning',0)}  "
+                 f"❌ Failed: {counts.get('Failed',0)}"]
+        for r in [x for x in rows if x.get("status") == "Failed"][:5]:
+            lines.append(f"  • **{r.get('job_name')}** — {r.get('failure_message','')}")
+        return "\n".join(lines)
+
+    # Single object detail
+    if "last_successful_backup" in keys and "active_restore_points" in keys and len(rows) == 1:
         r = rows[0]
-        lines = [f"**{r.get('object_name')}** ({r.get('object_type')})"]
-        lines.append(f"Job: {r.get('job_name')}  |  Server: {r.get('vbr_server')}")
-        lines.append(f"Last successful backup: {r.get('last_successful_backup')}")
-        lines.append(f"Restore points: {r.get('active_restore_points')}  |  Size: {r.get('size_gb')} GB")
+        return "\n".join([
+            f"**{r.get('object_name')}** ({r.get('object_type')}) ✅",
+            f"  Job: {r.get('job_name')}  |  Server: {r.get('vbr_server')}",
+            f"  Last backup: {r.get('last_successful_backup')}",
+            f"  Restore points: {r.get('active_restore_points')}  |  Size: {r.get('size_gb')} GB",
+        ])
+
+    # Protected objects list (multiple rows)
+    if "last_successful_backup" in keys and len(rows) > 1:
+        lines = [f"**{len(rows)} protected object(s):**"]
+        for r in rows[:40]:
+            lines.append(f"  • **{r.get('object_name')}** ({r.get('object_type')}) — "
+                         f"last backup: {r.get('last_successful_backup')}")
         return "\n".join(lines)
 
     # Restore points
@@ -351,17 +384,18 @@ def _format_rows(question, rows):
     if "used_pct" in keys:
         lines = ["**Repository capacity:**"]
         for r in rows:
-            pct = r.get("used_pct", 0)
+            pct = float(r.get("used_pct", 0))
             flag = " ⚠️" if pct >= 90 else ""
-            lines.append(f"  • {r.get('repo_name')} — {pct}% used  ({r.get('free_tb')} TB free){flag}")
+            lines.append(f"  • **{r.get('repo_name')}** on {r.get('vbr_server')} — "
+                         f"{pct}% used  ({r.get('free_tb')} TB free){flag}")
         return "\n".join(lines)
 
-    # Generic list (protected VMs, etc.)
+    # Single-column list
     if len(keys) == 1:
         items = [str(r[keys[0]]) for r in rows]
         return f"**{len(items)} result(s):**\n" + "\n".join(f"  • {i}" for i in items)
 
-    # Fallback: simple table
+    # Fallback table
     lines = [" | ".join(str(k) for k in keys)]
     for r in rows[:30]:
         lines.append(" | ".join(str(r.get(k, "")) for k in keys))
@@ -428,6 +462,10 @@ def process_question(question):
                 if not rows:
                     log.info(f"[CHAT] query returned 0 rows — {round(time.perf_counter()-t0,3)}s")
                     reply = "I checked the database and there's nothing to report here — either everything looks clean or this data isn't available. You might want to check with your Backup Administrator."
+
+                elif MODEL_PROVIDER in _LOCAL_PROVIDERS:
+                    reply = _format_rows(question, rows)
+                    log.info(f"[CHAT] local format done rows={len(rows)} — {round(time.perf_counter()-t0,3)}s")
 
                 else:
                     explain_prompt = (
@@ -545,9 +583,12 @@ def switch_provider():
         elif provider == "lmstudio":   LMSTUDIO_MODEL   = model
         elif provider == "ollama":     OLLAMA_MODEL     = model
 
-    # Reload prompts for the new provider type
-    _SYSTEM_PROMPT = _load_file("system_prompt.txt", "You are VeeamBot, a Veeam Backup expert. Speak naturally.")
-    _SQL_PROMPT    = _load_file("sql_prompt.txt",    "Generate a PostgreSQL SELECT query. Return SQL only.")
+    if provider in _LOCAL_PROVIDERS:
+        _SYSTEM_PROMPT = _load_file("system_prompt_local.txt", "You are a Veeam backup assistant. Explain the results clearly.")
+        _SQL_PROMPT    = _load_file("sql_prompt_local.txt",    "Return a PostgreSQL SELECT query only. No explanation.")
+    else:
+        _SYSTEM_PROMPT = _load_file("system_prompt.txt", "You are VeeamBot, a Veeam Backup expert. Speak naturally.")
+        _SQL_PROMPT    = _load_file("sql_prompt.txt",    "Generate a PostgreSQL SELECT query. Return SQL only.")
 
     active = _get_active_model()
     log.info(f"[SWITCH] {old_provider}/{old_model} -> {provider}/{active}")
