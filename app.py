@@ -193,14 +193,9 @@ def _load_file(filename, fallback=""):
             return f.read().strip()
     return fallback
 
-# Load once at startup — use local prompts for on-prem models, cloud prompts otherwise
 _LOCAL_PROVIDERS = {"lmstudio", "ollama"}
-if MODEL_PROVIDER in _LOCAL_PROVIDERS:
-    _SYSTEM_PROMPT = _load_file("system_prompt_local.txt", "You are a Veeam backup assistant. Explain the results clearly.")
-    _SQL_PROMPT    = _load_file("sql_prompt_local.txt",    "Return a PostgreSQL SELECT query only. No explanation.")
-else:
-    _SYSTEM_PROMPT = _load_file("system_prompt.txt", "You are VeeamBot, a Veeam Backup expert. Speak naturally.")
-    _SQL_PROMPT    = _load_file("sql_prompt.txt",    "Generate a PostgreSQL SELECT query. Return SQL only.")
+_SYSTEM_PROMPT = _load_file("system_prompt.txt", "You are VeeamBot, a Veeam Backup expert. Speak naturally.")
+_SQL_PROMPT    = _load_file("sql_prompt.txt",    "Generate a PostgreSQL SELECT query. Return SQL only.")
 
 def load_system_prompt(): return _SYSTEM_PROMPT
 def load_sql_prompt():    return _SQL_PROMPT
@@ -434,10 +429,6 @@ def process_question(question):
                     log.info(f"[CHAT] query returned 0 rows — {round(time.perf_counter()-t0,3)}s")
                     reply = "I checked the database and there's nothing to report here — either everything looks clean or this data isn't available. You might want to check with your Backup Administrator."
 
-                elif MODEL_PROVIDER in _LOCAL_PROVIDERS:
-                    reply = _format_rows(question, rows)
-                    log.info(f"[CHAT] local format done rows={len(rows)} — {round(time.perf_counter()-t0,3)}s")
-
                 else:
                     explain_prompt = (
                         "[QUERY RESULTS]\n" + sql + "\n" + str(rows[:50])
@@ -555,12 +546,8 @@ def switch_provider():
         elif provider == "ollama":     OLLAMA_MODEL     = model
 
     # Reload prompts for the new provider type
-    if provider in _LOCAL_PROVIDERS:
-        _SYSTEM_PROMPT = _load_file("system_prompt_local.txt", "You are a Veeam backup assistant. Explain the results clearly.")
-        _SQL_PROMPT    = _load_file("sql_prompt_local.txt",    "Return a PostgreSQL SELECT query only. No explanation.")
-    else:
-        _SYSTEM_PROMPT = _load_file("system_prompt.txt", "You are VeeamBot, a Veeam Backup expert. Speak naturally.")
-        _SQL_PROMPT    = _load_file("sql_prompt.txt",    "Generate a PostgreSQL SELECT query. Return SQL only.")
+    _SYSTEM_PROMPT = _load_file("system_prompt.txt", "You are VeeamBot, a Veeam Backup expert. Speak naturally.")
+    _SQL_PROMPT    = _load_file("sql_prompt.txt",    "Generate a PostgreSQL SELECT query. Return SQL only.")
 
     active = _get_active_model()
     log.info(f"[SWITCH] {old_provider}/{old_model} -> {provider}/{active}")
