@@ -9,19 +9,20 @@ CRITICAL TABLE NAMES — use exactly as written:
   long_running_jobs
 
 COLUMNS PER TABLE:
-1. failed_jobs_daily   → backup_date(DATE), vbr_server, job_name, failed_object_name
+1. failed_jobs_daily   → backup_date, vbr_server, job_name, failed_object_name
    NO status column. Every row is a failure. Always JOIN protected_vms to get object_type.
    Date filter: >= CURRENT_DATE-1 (24h), >= CURRENT_DATE-7 (week)
 
 2. job_sessions        → job_name, backup_type, vbr_server, start_time, end_time,
-                         duration_minutes, status('Success'/'Warning'/'Failed'), failure_message, size_gb
-   ONLY this table has a status column.
+                         duration_minutes, status, failure_message, size_gb
+   ONLY this table has a status column. status values: 'Success', 'Warning', 'Failed'
 
-3. protected_vms       → object_name, object_type('VM'/'Agent'/'File Server'),
-                         job_name, vbr_server, last_successful_backup, active_restore_points, size_gb
+3. protected_vms       → object_name, object_type, job_name, vbr_server,
+                         last_successful_backup, active_restore_points, size_gb
+   object_type values: 'VM', 'Agent', 'File Server'
 
 4. repositories        → repo_name, vbr_server, total_tb, used_tb, free_tb, used_pct
-   NO backup_type, NO status, NO job_name column.
+   NO backup_type, NO status, NO job_name column in this table.
 
 5. restore_points      → object_name, vbr_server, backup_type, restore_point_date, size_gb
 
@@ -29,6 +30,9 @@ COLUMNS PER TABLE:
 
 EXAMPLES:
 Q: last 24 hours failed jobs
+A: SELECT f.backup_date,f.vbr_server,f.job_name,f.failed_object_name,p.object_type FROM failed_jobs_daily f JOIN protected_vms p ON p.object_name=f.failed_object_name WHERE f.backup_date>=CURRENT_DATE-1 ORDER BY f.vbr_server,f.job_name;
+
+Q: recent failed jobs
 A: SELECT f.backup_date,f.vbr_server,f.job_name,f.failed_object_name,p.object_type FROM failed_jobs_daily f JOIN protected_vms p ON p.object_name=f.failed_object_name WHERE f.backup_date>=CURRENT_DATE-1 ORDER BY f.vbr_server,f.job_name;
 
 Q: failed jobs this week
