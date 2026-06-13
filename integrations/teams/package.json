@@ -1,0 +1,14 @@
+{
+  "name": "backuppulse-teams-bot",
+  "version": "1.0.0",
+  "description": "BackupPulse Microsoft Teams Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "botbuilder": "^4.21.0",
+    "restify": "^11.1.0"
+  }
+}
