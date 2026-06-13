@@ -92,6 +92,8 @@ GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_URL        = "https://api.groq.com/openai/v1/chat/completions"
 
+TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN", "")
+
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
@@ -616,22 +618,74 @@ def chat():
 @app.route("/google-chat", methods=["POST"])
 def google_chat_webhook():
     data = request.get_json(silent=True) or {}
+
+    # Add-on authorization handshake — complete silently server-side
+    if "authorizationEventObject" in data:
+        chat_payload = data.get("chat", {})
+        redirect_uri = (
+            chat_payload.get("messagePayload", {}).get("configCompleteRedirectUri")
+            or chat_payload.get("configCompleteRedirectUri")
+            or data.get("configCompleteRedirectUri", "")
+        )
+        log.info(f"[GOOGLE-CHAT] auth event, redirect={redirect_uri!r}")
+        if redirect_uri:
+            try:
+                requests.get(redirect_uri, timeout=5)
+                log.info("[GOOGLE-CHAT] config complete called")
+            except Exception as ex:
+                log.warning(f"[GOOGLE-CHAT] config complete error: {ex}")
+        return jsonify({"text": "BackupPulse is ready! Ask: recent failed jobs, repository capacity, list protected VMs"})
+
     event_type = data.get("type", "")
     if event_type == "ADDED_TO_SPACE":
         return jsonify({"text": "BackupPulse connected! Ask: recent failed jobs, repository capacity, list protected VMs"})
     if event_type == "REMOVED_FROM_SPACE":
         return jsonify({})
-    message = data.get("message", {})
+
+    # Add-on MESSAGE format: event.chat.messagePayload.message
+    chat = data.get("chat", {})
+    message = (
+        chat.get("messagePayload", {}).get("message")
+        or data.get("message", {})
+        or {}
+    )
     question = (message.get("argumentText") or message.get("text") or "").strip()
+    log.info(f"[GOOGLE-CHAT] event_type={event_type!r} question={question!r}")
+
     if not question:
         return jsonify({"text": "Hi! Try: recent failed jobs, repository capacity, list protected VMs"})
     try:
         answer = process_question(question)
-        log.info(f"[GOOGLE-CHAT] question={question!r}")
         return jsonify({"text": answer})
     except Exception as e:
         log.error(f"[GOOGLE-CHAT] error={e}")
         return jsonify({"text": "Error: " + str(e)})
+
+
+@app.route("/telegram", methods=["POST"])
+def telegram_webhook():
+    if not TELEGRAM_TOKEN:
+        return jsonify({"ok": False, "error": "Telegram not configured"}), 503
+    data = request.get_json(silent=True) or {}
+    message = data.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    question = (message.get("text") or "").strip()
+    if not chat_id:
+        return jsonify({"ok": True})
+    if not question or question.startswith("/start"):
+        reply = "Hi! Ask me about your Veeam backups.\n\nExamples:\n• recent failed jobs\n• repository capacity\n• list protected VMs\n• restore points for WApp03"
+    else:
+        try:
+            reply = process_question(question)
+            log.info(f"[TELEGRAM] question={question!r}")
+        except Exception as e:
+            log.error(f"[TELEGRAM] error={e}")
+            reply = "Error: " + str(e)
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={"chat_id": chat_id, "text": reply}
+    )
+    return jsonify({"ok": True})
 
 
 @app.route("/healthcheck")
