@@ -613,6 +613,27 @@ def chat():
         return jsonify({"answer": "Error: " + str(e)})
 
 
+@app.route("/google-chat", methods=["POST"])
+def google_chat_webhook():
+    data = request.get_json(silent=True) or {}
+    event_type = data.get("type", "")
+    if event_type == "ADDED_TO_SPACE":
+        return jsonify({"text": "BackupPulse connected! Ask: recent failed jobs, repository capacity, list protected VMs"})
+    if event_type == "REMOVED_FROM_SPACE":
+        return jsonify({})
+    message = data.get("message", {})
+    question = (message.get("argumentText") or message.get("text") or "").strip()
+    if not question:
+        return jsonify({"text": "Hi! Try: recent failed jobs, repository capacity, list protected VMs"})
+    try:
+        answer = process_question(question)
+        log.info(f"[GOOGLE-CHAT] question={question!r}")
+        return jsonify({"text": answer})
+    except Exception as e:
+        log.error(f"[GOOGLE-CHAT] error={e}")
+        return jsonify({"text": "Error: " + str(e)})
+
+
 @app.route("/healthcheck")
 def healthcheck():
     log.info("[ROUTE /healthcheck] generating health report")
