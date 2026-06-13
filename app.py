@@ -213,7 +213,7 @@ def call_openai_compatible(prompt, system, url, api_key, model, max_tokens=500):
     if system:
         msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
-    req_timeout = 180 if "localhost" in url or "127.0.0.1" in url else 30
+    req_timeout = 300 if "localhost" in url or "127.0.0.1" in url else 30
     log.info(f"[LLM] calling model={model} max_tokens={max_tokens} prompt_len={len(prompt)}")
     t0 = time.perf_counter()
     r = requests.post(

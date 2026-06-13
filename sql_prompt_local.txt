@@ -8,35 +8,17 @@ TABLES:
 5. restore_points     → object_name, vbr_server, backup_type, restore_point_date, size_gb
 6. long_running_jobs  → job_name, backup_type, vbr_server, start_time, duration_hours, alert_level
 
-RULES:
-- failed_jobs_daily has no status column. Every row is already a failure.
-- Always JOIN protected_vms when querying failed_jobs_daily to get object_type.
-- status column exists only in job_sessions.
+Note: failed_jobs_daily has no status column. Always JOIN protected_vms on object_name to get object_type.
 
 EXAMPLES:
 Q: recent failed jobs
 A: SELECT f.backup_date,f.vbr_server,f.job_name,f.failed_object_name,p.object_type FROM failed_jobs_daily f JOIN protected_vms p ON p.object_name=f.failed_object_name WHERE f.backup_date>=CURRENT_DATE-1 ORDER BY f.vbr_server,f.job_name;
 
-Q: last 24 hours failed jobs
-A: SELECT f.backup_date,f.vbr_server,f.job_name,f.failed_object_name,p.object_type FROM failed_jobs_daily f JOIN protected_vms p ON p.object_name=f.failed_object_name WHERE f.backup_date>=CURRENT_DATE-1 ORDER BY f.vbr_server,f.job_name;
-
-Q: failed jobs this week
-A: SELECT f.backup_date,f.vbr_server,f.job_name,f.failed_object_name,p.object_type FROM failed_jobs_daily f JOIN protected_vms p ON p.object_name=f.failed_object_name WHERE f.backup_date>=CURRENT_DATE-7 ORDER BY f.backup_date DESC;
-
-Q: VMs missing backups
-A: SELECT object_name,vbr_server,last_successful_backup FROM protected_vms WHERE last_successful_backup < NOW()-INTERVAL '24 hours' ORDER BY last_successful_backup;
+Q: list protected VMs
+A: SELECT object_name FROM protected_vms WHERE object_type='VM' ORDER BY object_name;
 
 Q: repository capacity
 A: SELECT repo_name,vbr_server,total_tb,used_tb,free_tb,used_pct FROM repositories ORDER BY used_pct DESC;
 
-Q: long running jobs
-A: SELECT job_name,vbr_server,duration_hours,alert_level FROM long_running_jobs ORDER BY duration_hours DESC;
-
-Q: list protected VMs
-A: SELECT object_name FROM protected_vms WHERE object_type='VM' ORDER BY object_name;
-
 Q: restore points for WAgt03
 A: SELECT restore_point_date,backup_type,size_gb FROM restore_points WHERE LOWER(object_name)=LOWER('WAgt03') ORDER BY restore_point_date DESC LIMIT 7;
-
-Q: tell me about WApp03
-A: SELECT object_name,object_type,job_name,vbr_server,last_successful_backup,active_restore_points,size_gb FROM protected_vms WHERE LOWER(object_name)=LOWER('WApp03');
