@@ -1,0 +1,27 @@
+# ── Secrets — NEVER commit these ────────────────────────────
+secret.key
+config_final.env
+
+# ── Runtime data ─────────────────────────────────────────────
+logs/
+remarks.json
+
+# ── Python cache ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ── Virtual environments ──────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Personal / internal docs ─────────────────────────────────
+PROJECT_EXPLAINED.txt
+create_ppt.py
+*.pptx
+
+# ── OS junk ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

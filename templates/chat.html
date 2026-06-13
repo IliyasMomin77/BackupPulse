@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Veeam AI Assistant</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f172a;--surface:#1e293b;--surface2:#263348;
+  --border:#334155;--primary:#1a5fa8;--accent:#38bdf8;
+  --text:#e2e8f0;--muted:#94a3b8;
+  --ok:#4ade80;--warn:#fbbf24;--fail:#f87171;
+}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#1a5fa8,#38bdf8);display:flex;align-items:center;justify-content:center;font-size:18px}
+.hdr-info h1{font-size:15px;font-weight:600}
+.hdr-info p{font-size:11px;color:var(--muted);margin-top:2px}
+.hdr-status{margin-left:auto;display:flex;align-items:center;gap:8px}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.health-btn{padding:7px 14px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:12px;cursor:pointer;transition:all .18s;white-space:nowrap}
+.health-btn:hover{border-color:#16A34A;color:#4ade80}
+.model-select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;outline:none;transition:border-color .2s}
+.model-select:focus,.model-select:hover{border-color:var(--accent)}
+.model-label{font-size:11px;color:var(--muted);white-space:nowrap}
+
+.msgs{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px}
+.msgs::-webkit-scrollbar{width:4px}
+.msgs::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+.row{display:flex;gap:10px;align-items:flex-end;animation:fadeUp .25s ease}
+.row.user{flex-direction:row-reverse}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+.av{width:30px;height:30px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px}
+.av.bot{background:linear-gradient(135deg,#1a5fa8,#38bdf8)}
+.av.user{background:var(--surface2)}
+
+.bub{max-width:70%;padding:11px 15px;font-size:13.5px;line-height:1.75}
+.bub.bot{background:var(--surface);border:1px solid var(--border);border-radius:14px 14px 14px 4px}
+.bub.user{background:var(--primary);color:#fff;border-radius:14px 14px 4px 14px}
+.bub.err{background:#2d1515;border:1px solid #7f1d1d;color:var(--fail);border-radius:14px 14px 14px 4px}
+.bub.bot b{color:#93c5fd}
+.bub.bot ul{padding-left:18px;margin:5px 0}
+.bub.bot li{margin:3px 0}
+.bub.bot .ok{color:var(--ok)}.bub.bot .warn{color:var(--warn)}.bub.bot .fail{color:var(--fail)}
+
+.typing{display:flex;gap:5px;align-items:center;padding:4px 0}
+.typing span{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:bounce 1.1s infinite}
+.typing span:nth-child(2){animation-delay:.18s}
+.typing span:nth-child(3){animation-delay:.36s}
+@keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-7px)}}
+
+.chips{padding:4px 24px 10px;display:flex;flex-wrap:wrap;gap:8px;flex-shrink:0}
+.chip{background:var(--surface);border:1px solid var(--border);color:var(--muted);padding:6px 13px;border-radius:18px;font-size:12px;cursor:pointer;transition:all .18s;white-space:nowrap}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+
+.bar{padding:12px 18px;background:var(--surface);border-top:1px solid var(--border);flex-shrink:0}
+.wrap{display:flex;align-items:flex-end;gap:10px;background:var(--bg);border:1.5px solid var(--border);border-radius:13px;padding:9px 13px;transition:border-color .2s}
+.wrap:focus-within{border-color:var(--accent)}
+textarea{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:13.5px;font-family:inherit;resize:none;min-height:22px;max-height:110px;line-height:1.5}
+textarea::placeholder{color:var(--muted)}
+.send{width:34px;height:34px;background:var(--primary);border:none;border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .2s,transform .1s}
+.send:hover{background:#2073c8}.send:active{transform:scale(.93)}.send:disabled{opacity:.35;cursor:not-allowed}
+.send svg{width:15px;height:15px;fill:#fff}
+.hint{font-size:11px;color:var(--muted);text-align:center;margin-top:7px}
+
+/* Email Preview Modal */
+#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:1000;padding:16px;overflow-y:auto}
+.modal-card{max-width:780px;margin:0 auto;background:var(--surface);border-radius:14px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.6)}
+.modal-hdr{padding:14px 18px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.modal-title{font-size:14px;font-weight:600;flex-shrink:0}
+#email-to{flex:1;min-width:180px;padding:7px 12px;background:var(--bg);border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;transition:border-color .2s}
+#email-to:focus{border-color:var(--accent)}
+.send-email-btn{padding:8px 16px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;font-weight:600;transition:background .2s;white-space:nowrap}
+.send-email-btn:hover{background:#15803d}.send-email-btn:disabled{opacity:.5;cursor:not-allowed}
+.close-btn{padding:8px 12px;background:var(--surface2);border:none;border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer}
+.close-btn:hover{color:var(--text)}
+#modal-status{display:none;padding:10px 18px;font-size:13px}
+#email-frame{width:100%;height:72vh;border:none;display:block;background:#fff}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">&#x1F6E1;&#xFE0F;</div>
+  <div class="hdr-info">
+    <h1>Veeam Backup AI Assistant</h1>
+    <p>BackupPulse &nbsp;&middot;&nbsp; {{ provider }}</p>
+  </div>
+  <div class="hdr-status">
+    <span class="model-label">Provider:</span>
+    <select id="provider-select" class="model-select" onchange="switchProvider(this.value)">
+      {% for p in providers %}
+      <option value="{{ p }}" {% if p == provider %}selected{% endif %}>{{ p }}</option>
+      {% endfor %}
+    </select>
+    <span class="model-label">Model:</span>
+    <select id="model-select" class="model-select" onchange="switchModel(this.value)">
+      <option value="{{ active_model }}">{{ active_model }}</option>
+    </select>
+    <span class="pulse"></span>
+    <button class="health-btn" onclick="healthReport()">&#x1F4CA; Health Report</button>
+  </div>
+</header>
+
+<div class="msgs" id="msgs">
+  <div class="row">
+    <div class="av bot">V</div>
+    <div class="bub bot">Hey! &#x1F44B; I'm <b>Veeam Backup AI Assistant</b> by BackupPulse. Ask me anything about your backup environment &mdash; failed jobs, restore points, repository capacity, or generate a health report.</div>
+  </div>
+</div>
+
+<div class="chips" id="chips">
+  <span class="chip" onclick="ask(this)">&#x1F534; Recent failed jobs</span>
+  <span class="chip" onclick="ask(this)">&#x1F4E6; Repository capacity</span>
+  <span class="chip" onclick="ask(this)">&#x1F4BE; VMs missing backups</span>
+  <span class="chip" onclick="ask(this)">&#x23F1;&#xFE0F; Long running jobs</span>
+  <span class="chip" onclick="healthReport()">&#x1F4CA; Health Report</span>
+</div>
+
+<div class="bar">
+  <div class="wrap">
+    <textarea id="q" rows="1" placeholder="Ask about your backups..."></textarea>
+    <button class="send" id="btn" onclick="send()">
+      <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+    </button>
+  </div>
+  <div class="hint">Enter to send &nbsp;&middot;&nbsp; Shift+Enter for new line</div>
+</div>
+
+<!-- Email Preview Modal -->
+<div id="modal">
+  <div class="modal-card">
+    <div class="modal-hdr">
+      <span class="modal-title">&#x1F4E7; Email Preview</span>
+      <input id="email-to" type="email" placeholder="recipient@company.com" value="{{ email_to }}">
+      <button class="send-email-btn" id="send-email-btn" onclick="sendEmail()">&#x2709;&#xFE0F; Send Email</button>
+      <button class="close-btn" onclick="closeModal()">&#x2715; Close</button>
+    </div>
+    <div id="modal-status"></div>
+    <iframe id="email-frame" srcdoc=""></iframe>
+  </div>
+</div>
+
+<script>
+const ta=document.getElementById('q'),msgs=document.getElementById('msgs'),btn=document.getElementById('btn');
+let _healthHtml='';
+
+const PROVIDER_MODELS={{ provider_models | tojson }};
+let _currentProvider='{{ provider }}';
+let _currentModel='{{ active_model }}';
+
+function populateModelDropdown(provider, selectedModel){
+  const sel=document.getElementById('model-select');
+  const models=PROVIDER_MODELS[provider]||[];
+  if(models.length===0){
+    // Local providers — model depends on what's running, show current as read-only
+    sel.innerHTML=`<option value="${selectedModel}">${selectedModel||'(auto)'}</option>`;
+    sel.disabled=true;
+    return;
+  }
+  sel.disabled=false;
+  sel.innerHTML=models.map(m=>`<option value="${m}"${m===selectedModel?' selected':''}>${m}</option>`).join('');
+}
+
+// Populate on load
+populateModelDropdown(_currentProvider, _currentModel);
+
+ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,110)+'px'});
+ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+document.getElementById('modal').addEventListener('click',function(e){if(e.target===this)closeModal()});
+
+function ask(c){ta.value=c.textContent.replace(/^[^a-zA-Z]+/,'').trim();send()}
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+function renderMd(text){
+  const lines=text.split('\n');
+  let out='',inList=false;
+  for(const line of lines){
+    let l=esc(line);
+    l=l.replace(/\*\*(.*?)\*\*/g,'<b>$1</b>');
+    l=l.replace(/\b(Failed|Critical|FAILED)\b/g,'<span class="fail">$1</span>');
+    l=l.replace(/\b(Warning|WARNING)\b/g,'<span class="warn">$1</span>');
+    l=l.replace(/\b(Success|SUCCESS|Healthy)\b/g,'<span class="ok">$1</span>');
+    if(/^[-•*] /.test(line)){
+      if(!inList){out+='<ul>';inList=true;}
+      out+='<li>'+l.replace(/^[-•*] /,'')+'</li>';
+    }else{
+      if(inList){out+='</ul>';inList=false;}
+      out+=l+'<br>';
+    }
+  }
+  if(inList)out+='</ul>';
+  return out.replace(/<br>$/,'');
+}
+
+function addMsg(cls,html){
+  const row=document.createElement('div');
+  row.className='row '+(cls==='user'?'user':'');
+  const av=document.createElement('div');av.className='av '+cls;av.textContent=cls==='user'?'U':'V';
+  const bub=document.createElement('div');bub.className='bub '+cls;bub.innerHTML=html;
+  row.append(av,bub);msgs.appendChild(row);msgs.scrollTop=msgs.scrollHeight;
+}
+
+function addTyping(){
+  const row=document.createElement('div');row.className='row';row.id='tr';
+  const av=document.createElement('div');av.className='av bot';av.textContent='V';
+  const bub=document.createElement('div');bub.className='bub bot';
+  bub.innerHTML='<div class="typing"><span></span><span></span><span></span></div>';
+  row.append(av,bub);msgs.appendChild(row);msgs.scrollTop=msgs.scrollHeight;
+  return row;
+}
+
+const HEALTH_TRIGGERS=[
+  'health report','healthcheck','health check',
+  'backup report','backup health','backup status report',
+  'generate report','show report','open report',
+  'today report',"today's report",'daily report',
+  'generate today','daily summary','backup summary',
+  'email report','send report','morning report'
+];
+const REMARK_TRIGGERS=[
+  // explicit remark commands
+  'remark','add note','note for','action item','mark as','update report','add to report',
+  // job actions — rerun
+  'i have rerun','i rerun','i\'ve rerun','rerun done','rerun complete','job rerun','rerun the job',
+  'i ran','i retried','retried','backup retry','backup retried','retry done',
+  // resolution
+  'completed successfully','fixed successfully','resolved successfully',
+  'issue fixed','issue resolved','problem fixed','problem resolved',
+  'backup successful','job successful','now successful',
+  // in-progress states
+  'case raised','case has been raised','ticket raised','ticket opened','ticket created',
+  'troubleshooting','troubleshoot is','troubleshoot ongoing',
+  'investigating','under investigation','being investigated',
+  'in run state','currently running','backup running','job running','still running',
+  'in progress','work in progress',
+  // planned / pending
+  'will rerun','planned rerun','scheduling rerun','will retry','scheduled for',
+  'will monitor','monitoring now','no action needed','no action required',
+  // update phrases
+  'for this job','for this server','for this vm','update for','update on',
+  'i have done','action taken','status update','i\'ve done',
+];
+const REMOVE_TRIGGERS=['remove remark','remove this remark','remove the remark','delete remark','delete this remark','delete the remark','remove this entry','delete this entry'];
+const CLEAR_TRIGGERS=['clear all remark','clear remark','clear all note','clear note','reset remark','clear action item','clear action','clear all','reset all'];
+const QUESTION_STARTERS=/^(what|how|show|list|display|find|get|check|are|is|does|can|which|who|when|where|why|do|did|give|tell)/i;
+
+function isHealthRequest(q){const l=q.toLowerCase();return HEALTH_TRIGGERS.some(t=>l.includes(t));}
+function isRemarkRequest(q){
+  const l=q.toLowerCase();
+  if(q.trim().endsWith('?')||QUESTION_STARTERS.test(q.trim())) return false;
+  if(REMOVE_TRIGGERS.some(t=>l.includes(t))) return false;
+  if(CLEAR_TRIGGERS.some(t=>l.includes(t))) return false;
+  return REMARK_TRIGGERS.some(t=>l.includes(t));
+}
+function isRemoveRequest(q){const l=q.toLowerCase();return REMOVE_TRIGGERS.some(t=>l.includes(t));}
+function isClearRequest(q){const l=q.toLowerCase();return CLEAR_TRIGGERS.some(t=>l.includes(t));}
+
+async function send(){
+  const q=ta.value.trim();
+  if(!q||btn.disabled)return;
+  addMsg('user',esc(q));
+  ta.value='';ta.style.height='auto';
+
+  if(isHealthRequest(q)){
+    addMsg('bot','Sure! Opening the backup health report now — review it and send when ready. &#x1F4CA;');
+    ta.focus();
+    healthReport();
+    return;
+  }
+
+  if(isRemoveRequest(q)){
+    btn.disabled=true;
+    const tr=addTyping();
+    try{
+      const r=await fetch('/remove-remark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:q})});
+      const d=await r.json();
+      tr.remove();
+      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
+      else{
+        addMsg('bot',renderMd(d.message));
+        _healthHtml=d.html;
+        if(document.getElementById('modal').style.display==='block'){
+          document.getElementById('email-frame').srcdoc=_healthHtml;
+        } else {
+          document.getElementById('modal').style.display='block';
+          document.getElementById('modal-status').style.display='none';
+          document.getElementById('email-frame').srcdoc=_healthHtml;
+        }
+      }
+    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
+    btn.disabled=false;ta.focus();
+    return;
+  }
+
+  if(isClearRequest(q)){
+    await fetch('/clear-remarks',{method:'POST'});
+    addMsg('bot','All remarks cleared. &#x1F5D1;&#xFE0F; The report is back to its original state.');
+    if(document.getElementById('modal').style.display==='block') healthReport();
+    ta.focus();
+    return;
+  }
+
+  if(isRemarkRequest(q)){
+    btn.disabled=true;
+    const tr=addTyping();
+    try{
+      const r=await fetch('/add-remark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:q})});
+      const d=await r.json();
+      tr.remove();
+      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
+      else{
+        addMsg('bot',renderMd(d.message+'\n\nThe report has been updated with this remark. &#x1F4DD;'));
+        _healthHtml=d.html;
+        if(document.getElementById('modal').style.display==='block'){
+          document.getElementById('email-frame').srcdoc=_healthHtml;
+        } else {
+          document.getElementById('modal').style.display='block';
+          document.getElementById('modal-status').style.display='none';
+          document.getElementById('email-frame').srcdoc=_healthHtml;
+        }
+      }
+    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
+    btn.disabled=false;ta.focus();
+    return;
+  }
+
+  btn.disabled=true;
+  const tr=addTyping();
+  try{
+    const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const d=await r.json();
+    tr.remove();addMsg('bot',renderMd(d.answer));
+  }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error. Please try again.');}
+  btn.disabled=false;ta.focus();
+}
+
+async function healthReport(){
+  document.getElementById('modal').style.display='block';
+  document.getElementById('modal-status').style.display='none';
+  document.getElementById('email-frame').srcdoc=
+    '<body style="font-family:Arial;display:flex;align-items:center;justify-content:center;height:90vh;color:#666">'
+    +'<div style="text-align:center"><div style="font-size:32px;margin-bottom:12px">&#x23F3;</div>'
+    +'<div style="font-size:14px">Loading health report...</div></div></body>';
+  try{
+    const r=await fetch('/healthcheck');
+    const d=await r.json();
+    if(d.error){
+      document.getElementById('email-frame').srcdoc=
+        '<body style="font-family:Arial;padding:24px;color:#DC2626">Error: '+esc(d.error)+'</body>';
+      return;
+    }
+    _healthHtml=d.email_html;
+    document.getElementById('email-frame').srcdoc=_healthHtml;
+  }catch(e){
+    document.getElementById('email-frame').srcdoc=
+      '<body style="font-family:Arial;padding:24px;color:#DC2626">Connection error loading report.</body>';
+  }
+}
+
+async function sendEmail(){
+  const to=document.getElementById('email-to').value.trim();
+  const statusEl=document.getElementById('modal-status');
+  const sendBtn=document.getElementById('send-email-btn');
+  if(!to){
+    statusEl.style.cssText='display:block;padding:10px 18px;font-size:13px;background:#FEF3C7;color:#B45309';
+    statusEl.textContent='Please enter a recipient email address.';
+    return;
+  }
+  sendBtn.disabled=true;sendBtn.textContent='Sending...';
+  try{
+    const r=await fetch('/send-healthcheck',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({to,html:_healthHtml})
+    });
+    const d=await r.json();
+    if(d.success){
+      statusEl.style.cssText='display:block;padding:10px 18px;font-size:13px;background:#D1FAE5;color:#065F46';
+      statusEl.textContent='✅ '+d.message;
+    }else{
+      statusEl.style.cssText='display:block;padding:10px 18px;font-size:13px;background:#FEE2E2;color:#991B1B';
+      statusEl.textContent='❌ '+d.error;
+    }
+  }catch(e){
+    statusEl.style.cssText='display:block;padding:10px 18px;font-size:13px;background:#FEE2E2;color:#991B1B';
+    statusEl.textContent='❌ Connection error. Please try again.';
+  }
+  sendBtn.disabled=false;sendBtn.textContent='✉️ Send Email';
+}
+
+function closeModal(){
+  document.getElementById('modal').style.display='none';
+  document.getElementById('modal-status').style.display='none';
+}
+
+async function switchProvider(provider){
+  const pSel=document.getElementById('provider-select');
+  const mSel=document.getElementById('model-select');
+  pSel.disabled=true;
+  // Pick the first model for the new provider as default
+  const models=PROVIDER_MODELS[provider]||[];
+  const defaultModel=models.length>0?models[0]:_currentModel;
+  try{
+    const r=await fetch('/switch-provider',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,model:defaultModel})});
+    const d=await r.json();
+    if(d.success){
+      _currentProvider=provider;
+      _currentModel=d.model;
+      document.querySelector('.hdr-info p').textContent='BackupPulse \xb7 '+provider;
+      populateModelDropdown(provider, d.model);
+      addMsg('bot','Switched to <b>'+provider+'</b> &mdash; <b>'+d.model+'</b>. Your next question will use this model.');
+    }else{
+      addMsg('err','&#x26A0;&#xFE0F; '+(d.error||'Failed to switch provider'));
+      pSel.value=_currentProvider;
+    }
+  }catch(e){
+    addMsg('err','&#x26A0;&#xFE0F; Connection error while switching provider.');
+    pSel.value=_currentProvider;
+  }
+  pSel.disabled=false;
+}
+
+async function switchModel(model){
+  const mSel=document.getElementById('model-select');
+  mSel.disabled=true;
+  try{
+    const r=await fetch('/switch-provider',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:_currentProvider,model})});
+    const d=await r.json();
+    if(d.success){
+      _currentModel=d.model;
+      addMsg('bot','Model switched to <b>'+d.model+'</b>.');
+    }else{
+      addMsg('err','&#x26A0;&#xFE0F; '+(d.error||'Failed to switch model'));
+      mSel.value=_currentModel;
+    }
+  }catch(e){
+    addMsg('err','&#x26A0;&#xFE0F; Connection error while switching model.');
+    mSel.value=_currentModel;
+  }
+  mSel.disabled=false;
+}
+</script>
+</body>
+</html>
