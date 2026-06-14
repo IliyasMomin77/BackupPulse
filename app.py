@@ -148,8 +148,7 @@ PROVIDER_MODELS = {
         "phi-4-mini-instruct",     # 3.8B — newer Phi, better reasoning
     ],
     "ollama": [
-        "phi3.5",                  # phi-3.5-mini via Ollama
-        "phi4-mini",               # phi-4-mini via Ollama
+        "phi3:mini",
     ],
 }
 
