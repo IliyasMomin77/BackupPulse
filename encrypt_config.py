@@ -33,7 +33,7 @@ for line in lines:
     if stripped and not stripped.startswith('#') and '=' in stripped:
         k, _, v = stripped.partition('=')
         k, v = k.strip(), v.strip()
-        if k in SENSITIVE and v and not v.startswith('ENC:') and not v.startswith('your_'):
+        if k in SENSITIVE and v and not v.startswith('ENC:'):
             encrypted = fernet.encrypt(v.encode()).decode()
             new_lines.append(f"{k}=ENC:{encrypted}\n")
             print(f"  Encrypted: {k}")

@@ -93,12 +93,12 @@ GROQ_MODEL      = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_URL        = "https://api.groq.com/openai/v1/chat/completions"
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
 # LM Studio — local, air-gapped, zero external calls
 LMSTUDIO_URL   = os.getenv("LMSTUDIO_URL",   "http://localhost:1234/v1/chat/completions")
-LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "llama-3.2-3b-instruct")
+LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "phi-3.5-mini-instruct")
 
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL    = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -109,7 +109,7 @@ COPILOT_MODEL   = os.getenv("COPILOT_MODEL", "gpt-4o")
 COPILOT_URL     = os.getenv("COPILOT_URL", "https://api.githubcopilot.com/chat/completions")
 
 OLLAMA_URL      = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "phi3:mini")
+OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "phi3.5")
 
 # Known selectable models per provider (shown in the UI dropdown)
 # Groq & OpenRouter: verified free models as of 2026
