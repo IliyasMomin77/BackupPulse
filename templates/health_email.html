@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;background:#f0f2f5;margin:0;padding:20px;color:#374151}
+  .wrap{max-width:720px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.1)}
+  .hdr{background:#1F4E79;color:#fff;padding:24px 28px}
+  .hdr h1{margin:0;font-size:20px;font-weight:700}
+  .hdr p{margin:6px 0 0;opacity:.65;font-size:12px}
+  .badge-overall{display:inline-block;padding:5px 16px;border-radius:20px;font-size:12px;font-weight:700;margin-top:12px;letter-spacing:.5px}
+  .stats{display:flex;border-bottom:1px solid #f0f0f0}
+  .stat{flex:1;padding:18px 10px;text-align:center;border-right:1px solid #f0f0f0}
+  .stat:last-child{border-right:none}
+  .stat.red{background:#FEF2F2}.stat.yellow{background:#FFFBEB}.stat.green{background:#F0FDF4}
+  .stat-n{font-size:34px;font-weight:700;line-height:1}
+  .stat-n.red{color:#DC2626}.stat-n.yellow{color:#D97706}.stat-n.green{color:#16A34A}
+  .stat-l{font-size:11px;color:#6B7280;margin-top:6px;line-height:1.4}
+  .section{padding:20px 28px;border-bottom:1px solid #f3f4f6}
+  h2{margin:0 0 14px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .h-red{color:#DC2626}.h-yellow{color:#B45309}.h-green{color:#059669}
+  .cnt{padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700}
+  .cnt.red{background:#FEE2E2;color:#DC2626}.cnt.yellow{background:#FEF3C7;color:#D97706}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:#F9FAFB;padding:8px 12px;text-align:left;font-weight:600;color:#6B7280;font-size:11px;border-bottom:2px solid #E5E7EB;text-transform:uppercase;letter-spacing:.4px}
+  td{padding:9px 12px;border-bottom:1px solid #F3F4F6}
+  tr:nth-child(even) td{background:#FAFAFA}
+  .badge-red{background:#FEE2E2;color:#DC2626;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600}
+  .badge-yellow{background:#FEF3C7;color:#D97706;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600}
+  .badge-green{background:#D1FAE5;color:#065F46;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600}
+  .badge-blue{background:#DBEAFE;color:#1D4ED8;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600}
+  .h-blue{color:#1D4ED8}
+  .cnt.blue{background:#DBEAFE;color:#1D4ED8}
+  .ok{color:#16A34A;font-size:13px;margin:0;padding:4px 0}
+  .msg{color:#9CA3AF;font-size:12px;max-width:180px}
+  .footer{background:#F9FAFB;padding:14px 28px;font-size:11px;color:#9CA3AF}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hdr">
+    <h1>&#x1F6E1;&#xFE0F; Veeam Backup Health Report</h1>
+    <p>Generated: {{ ts }} &nbsp;&middot;&nbsp; BackupPulse</p>
+    <span class="badge-overall" style="background:{{ overall_bg }};color:#fff">{{ overall }}</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat {{ f_cls }}">
+      <div class="stat-n {{ f_cls }}">{{ failed_24h | length }}</div>
+      <div class="stat-l">Failed Backups<br>Last 24 Hours</div>
+    </div>
+    <div class="stat {{ r_cls }}">
+      <div class="stat-n {{ r_cls }}">{{ critical_repos | length }}</div>
+      <div class="stat-l">Repositories<br>Above 90%</div>
+    </div>
+    <div class="stat {{ j_cls }}">
+      <div class="stat-n {{ j_cls }}">{{ incomplete_jobs | length }}</div>
+      <div class="stat-l">Incomplete Jobs<br>Last 24 Hours</div>
+    </div>
+  </div>
+
+  {# ── Failed backups ── #}
+  {% if failed_24h %}
+  <div class="section">
+    <h2 class="h-red">&#x1F534; Failed Backups &ndash; Last 24 Hours
+      &nbsp;<span class="cnt red">{{ failed_24h | length }}</span></h2>
+    <table>
+      <tr><th>Date</th><th>VM / Object</th><th>Job Name</th><th>Server</th></tr>
+      {% for r in failed_24h[:60] %}
+      <tr>
+        <td>{{ r.backup_date }}</td>
+        <td><b>{{ r.failed_object_name }}</b></td>
+        <td>{{ r.job_name }}</td>
+        <td>{{ r.vbr_server }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <div class="section">
+    <h2 class="h-green">&#x2705; Failed Backups &ndash; Last 24 Hours</h2>
+    <p class="ok">No failed backups in the last 24 hours.</p>
+  </div>
+  {% endif %}
+
+  {# ── Repositories ── #}
+  {% if critical_repos %}
+  <div class="section">
+    <h2 class="h-red">&#x26A0;&#xFE0F; Repository Capacity Alert
+      &nbsp;<span class="cnt red">{{ critical_repos | length }}</span></h2>
+    <table>
+      <tr><th>Repository</th><th>Type</th><th>Total</th><th>Used</th><th>Free</th><th>Used %</th></tr>
+      {% for r in critical_repos %}
+      <tr>
+        <td><b>{{ r.repo_name }}</b></td>
+        <td>{{ r.repo_type }}</td>
+        <td>{{ r.total_tb | round(1) }} TB</td>
+        <td>{{ r.used_tb | round(1) }} TB</td>
+        <td>{{ r.free_tb | round(1) }} TB</td>
+        <td>
+          <span class="{{ 'badge-red' if r.used_pct >= 95 else 'badge-yellow' }}">
+            {{ r.used_pct | round(1) }}%
+          </span>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <div class="section">
+    <h2 class="h-green">&#x2705; Repository Capacity</h2>
+    <p class="ok">All repositories are below 90% capacity.</p>
+  </div>
+  {% endif %}
+
+  {# ── Incomplete jobs ── #}
+  {% if incomplete_jobs %}
+  <div class="section">
+    <h2 class="h-yellow">&#x23F0; Incomplete Jobs &ndash; Last 24 Hours
+      &nbsp;<span class="cnt yellow">{{ incomplete_jobs | length }}</span></h2>
+    <table>
+      <tr><th>Job Name</th><th>Server</th><th>Start Time</th><th>Duration</th><th>Status</th><th>Message</th></tr>
+      {% for r in incomplete_jobs[:30] %}
+      <tr>
+        <td><b>{{ r.job_name }}</b></td>
+        <td>{{ r.vbr_server }}</td>
+        <td>{{ r.start_time | dt }}</td>
+        <td>{% if r.duration_minutes %}{{ r.duration_minutes | int }} min{% else %}N/A{% endif %}</td>
+        <td>
+          <span class="{{ 'badge-red' if r.status == 'Failed' else 'badge-yellow' }}">
+            {{ r.status }}
+          </span>
+        </td>
+        <td class="msg">{{ (r.failure_message or '')[:80] }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <div class="section">
+    <h2 class="h-green">&#x2705; Job Completion &ndash; Last 24 Hours</h2>
+    <p class="ok">All jobs completed successfully in the last 24 hours.</p>
+  </div>
+  {% endif %}
+
+  {# ── Remarks & Action Items ── #}
+  {% if remarks %}
+  <div class="section">
+    <h2 class="h-blue">&#x1F4DD; Engineer Action Items
+      &nbsp;<span class="cnt blue">{{ remarks | length }}</span></h2>
+    <table>
+      <tr><th>Job Name</th><th>VBR Server</th><th>VM / Object</th><th>Action</th><th>Status</th><th>Notes</th><th>Time</th></tr>
+      {% for r in remarks %}
+      <tr>
+        <td><b>{{ r.job_name if r.job_name and r.job_name != 'Unknown' else '—' }}</b></td>
+        <td>{{ r.vbr_server if r.vbr_server and r.vbr_server != 'Unknown' else '—' }}</td>
+        <td>{{ r.vm_object if r.vm_object and r.vm_object != 'Unknown' else '—' }}</td>
+        <td>{{ r.action }}</td>
+        <td>
+          {% set s = r.status %}
+          {% if s == 'Completed' %}
+            <span class="badge-green">&#x2705; {{ s }}</span>
+          {% elif s == 'Running' %}
+            <span class="badge-blue">&#x1F504; {{ s }}</span>
+          {% elif s == 'Case Raised' %}
+            <span class="badge-yellow">&#x1F4CB; {{ s }}</span>
+          {% elif s == 'In Progress' %}
+            <span class="badge-yellow">&#x23F3; {{ s }}</span>
+          {% elif s == 'Monitoring' %}
+            <span class="badge-blue">&#x1F50D; {{ s }}</span>
+          {% else %}
+            <span class="badge-red">&#x23F8;&#xFE0F; {{ s }}</span>
+          {% endif %}
+        </td>
+        <td>{{ r.note }}</td>
+        <td style="white-space:nowrap;color:#9CA3AF;font-size:11px">{{ r.timestamp }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="footer">
+    BackupPulse &nbsp;&middot;&nbsp; Veeam Backup AI Assistant &nbsp;&middot;&nbsp; {{ ts }}
+    {% if remarks %}&nbsp;&middot;&nbsp; {{ remarks | length }} action item(s) recorded{% endif %}
+  </div>
+
+</div>
+</body>
+</html>
