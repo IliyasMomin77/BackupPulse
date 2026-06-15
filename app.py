@@ -742,6 +742,22 @@ def chat():
         return jsonify({"answer": "Error: " + str(e)})
 
 
+@app.route("/create-incident", methods=["POST"])
+def create_incident_route():
+    data        = request.get_json()
+    description = data.get("description", "").strip()
+    if not description:
+        return jsonify({"error": "Description required"}), 400
+    short_desc  = description[:100]
+    log.info(f"[ROUTE /create-incident] short_desc={short_desc!r}")
+    try:
+        inc_number, inc_url = create_snow_incident(short_desc, description, urgency=2)
+        return jsonify({"success": True, "message": f"✅ Incident **{inc_number}** created in ServiceNow.\n\n**Summary:** {short_desc}\n**Priority:** High\n**View:** {inc_url}"})
+    except Exception as e:
+        log.error(f"[ROUTE /create-incident] error={e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/resolve-incident", methods=["POST"])
 def resolve_incident_route():
     data = request.get_json()

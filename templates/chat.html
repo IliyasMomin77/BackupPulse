@@ -130,6 +130,8 @@ textarea::placeholder{color:var(--muted)}
   <span class="chip" onclick="ask(this)">&#x1F4BE; VMs missing backups</span>
   <span class="chip" onclick="ask(this)">&#x23F1;&#xFE0F; Long running jobs</span>
   <span class="chip" onclick="healthReport()">&#x1F4CA; Health Report</span>
+  <span class="chip" onclick="ta.value='/Create-IM ';ta.focus()">&#x1F3AB; /Create-IM</span>
+  <span class="chip" onclick="ta.value='/Resolve-IM INC';ta.focus()">&#x2705; /Resolve-IM</span>
 </div>
 
 <div class="bar">
@@ -226,7 +228,10 @@ function addTyping(){
   return row;
 }
 
-const HEALTH_TRIGGERS=[
+const SNOW_CREATE_CMD=/^\/create-im\b/i;
+const SNOW_RESOLVE_CMD=/^\/resolve-im\s+(INC\d+)/i;
+
+
   'health report','healthcheck','health check',
   'backup report','backup health','backup status report',
   'generate report','show report','open report',
@@ -277,6 +282,31 @@ async function send(){
   if(!q||btn.disabled)return;
   addMsg('user',esc(q));
   ta.value='';ta.style.height='auto';
+
+  // /Create-IM — extract description after command and create incident
+  if(SNOW_CREATE_CMD.test(q)){
+    const desc=q.replace(/^\/create-im\s*/i,'').trim()||'Backup issue reported';
+    btn.disabled=true;
+    const tr=addTyping();
+    try{
+      const r=await fetch('/create-incident',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:desc})});
+      const d=await r.json();
+      tr.remove();
+      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
+      else{addMsg('bot',renderMd(d.message));}
+    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
+    btn.disabled=false;ta.focus();
+    return;
+  }
+
+  // /Resolve-IM INC#### — show resolve form directly
+  const resolveMatch=q.match(SNOW_RESOLVE_CMD);
+  if(resolveMatch){
+    const incNumber=resolveMatch[1].toUpperCase();
+    addSnowResolveForm(`To resolve **${incNumber}**, fill in the mandatory fields below:`, incNumber);
+    ta.focus();
+    return;
+  }
 
   if(isHealthRequest(q)){
     addMsg('bot','Sure! Opening the backup health report now — review it and send when ready. &#x1F4CA;');
