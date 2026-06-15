@@ -77,7 +77,7 @@ def _save_remarks(remarks):
     except Exception:
         pass
 
-_remarks = []  # always start fresh; saved to file mid-session only
+_remarks = {}  # keyed by "vbr_server|job_name|failed_object_name" → remark text
 
 # Incident resolution log — description + resolution only, used as LLM context
 _INCIDENTS_LOG = os.path.join(_log_dir, 'incidents.jsonl')
@@ -933,7 +933,7 @@ def healthcheck():
         failed_24h, critical_repos, incomplete_jobs = _fetch_health_data()
         log.info(f"[ROUTE /healthcheck] failed={len(failed_24h)} repos={len(critical_repos)} jobs={len(incomplete_jobs)} remarks={len(_remarks)} — {round(time.perf_counter()-t0,3)}s")
         return jsonify({
-            "email_html": generate_health_email(failed_24h, critical_repos, incomplete_jobs, list(_remarks)),
+            "email_html": generate_health_email(failed_24h, critical_repos, incomplete_jobs, dict(_remarks)),
             "counts": {
                 "failed": len(failed_24h),
                 "repos":  len(critical_repos),
@@ -946,125 +946,41 @@ def healthcheck():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/add-remark", methods=["POST"])
-def add_remark():
-    data = request.get_json()
-    instruction = data.get("instruction", "").strip()
-    if not instruction:
-        return jsonify({"error": "No instruction provided"}), 400
-    log.info(f"[ROUTE /add-remark] instruction={instruction!r}")
+@app.route("/failed-jobs-list")
+def failed_jobs_list():
     try:
-        parse_prompt = (
-            'You are a Veeam backup admin assistant parsing an engineer\'s action update.\n'
-            f'The update may mention ONE or MULTIPLE jobs/actions. Extract ALL of them.\n'
-            f'Input: "{instruction}"\n\n'
-            'Return a JSON ARRAY — one object per job/action mentioned. Example:\n'
-            '[\n'
-            '  {"job_name": "Prod_VM_Job", "vbr_server": "VBR1 or Unknown", "vm_object": "VM name or Unknown",\n'
-            '   "action": "Backup Retry", "status": "Running",\n'
-            '   "note": "Backup retry initiated, job currently running"},\n'
-            '  {"job_name": "Linux_VM_Job", "vbr_server": "VBR2 or Unknown", "vm_object": "Unknown",\n'
-            '   "action": "Backup Retry", "status": "Completed",\n'
-            '   "note": "Backup retry completed successfully"}\n'
-            ']\n\n'
-            'Status rules:\n'
-            '- completed/success/fixed/resolved → Completed\n'
-            '- running/retried/retry/running now → Running\n'
-            '- case raised/ticket/INC/troubleshoot/investigating → Case Raised\n'
-            '- will/scheduled/planned/monitor → Pending\n'
-            'Return JSON array only. No explanation.'
-        )
-        raw = call_llm(parse_prompt, "Extract structured data. Return only a JSON array.", max_tokens=400)
-
-        # Try array first, fallback to single object
-        arr_match = re.search(r'\[.*?\]', raw, re.DOTALL)
-        if arr_match:
-            parsed = json.loads(arr_match.group())
-            if isinstance(parsed, dict):
-                parsed = [parsed]
-        else:
-            obj_match = re.search(r'\{[^{}]+\}', raw, re.DOTALL)
-            if not obj_match:
-                return jsonify({"error": "Could not parse remarks from instruction"}), 400
-            parsed = [json.loads(obj_match.group())]
-
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        new_remarks = []
-        for r in parsed:
-            r["timestamp"] = ts
-            _remarks.append(r)
-            new_remarks.append(r)
-        _save_remarks(_remarks)
-        log.info(f"[ROUTE /add-remark] added {len(new_remarks)} remark(s), total={len(_remarks)}")
-
-        failed_24h, critical_repos, incomplete_jobs = _fetch_health_data()
-        email_html = generate_health_email(failed_24h, critical_repos, incomplete_jobs, list(_remarks))
-
-        lines = []
-        for r in new_remarks:
-            job  = r.get('job_name', 'Unknown')
-            vbr  = r.get('vbr_server', '')
-            act  = r.get('action', '')
-            stat = r.get('status', '')
-            ctx  = job + (f" ({vbr})" if vbr and vbr != 'Unknown' else "")
-            lines.append(f"- **{ctx}** — {act} [{stat}]")
-
-        summary = "\n".join(lines)
-        count = len(new_remarks)
-        msg = f"Logged {count} remark{'s' if count > 1 else ''}:\n{summary}\n\nReport updated. Send when ready."
-        return jsonify({
-            "html": email_html,
-            "remark": new_remarks[0],
-            "message": msg
-        })
+        failed_24h, _, _ = _fetch_health_data()
+        jobs = []
+        for r in failed_24h[:60]:
+            key = f"{r['vbr_server']}|{r['job_name']}|{r['failed_object_name']}"
+            jobs.append({
+                "key":         key,
+                "backup_date": str(r.get("backup_date", "")),
+                "vbr_server":  r.get("vbr_server", ""),
+                "job_name":    r.get("job_name", ""),
+                "object":      r.get("failed_object_name", ""),
+                "remark":      _remarks.get(key, ""),
+            })
+        return jsonify({"jobs": jobs})
     except Exception as e:
-        log.error(f"[ROUTE /add-remark] error={e}")
+        log.error(f"[ROUTE /failed-jobs-list] error={e}")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/remove-remark", methods=["POST"])
-def remove_remark():
+@app.route("/set-remarks", methods=["POST"])
+def set_remarks():
     data = request.get_json()
-    instruction = data.get("instruction", "").strip()
-    if not instruction:
-        return jsonify({"error": "No instruction provided"}), 400
-    if not _remarks:
-        return jsonify({"error": "No remarks to remove."}), 400
-    log.info(f"[ROUTE /remove-remark] instruction={instruction!r}")
-    try:
-        # Ask LLM to identify which remark to remove
-        list_str = "\n".join(
-            f"{i}: job={r.get('job_name','?')} vm={r.get('vm_object','?')} action={r.get('action','?')} status={r.get('status','?')} time={r.get('timestamp','?')}"
-            for i, r in enumerate(_remarks)
-        )
-        parse_prompt = (
-            f'The engineer wants to remove one remark. Their instruction: "{instruction}"\n\n'
-            f'Current remarks (index: details):\n{list_str}\n\n'
-            'Return ONLY the integer index of the remark to remove. Nothing else.'
-        )
-        raw = call_llm(parse_prompt, "Return only a single integer index.", max_tokens=10)
-        idx_match = re.search(r'\d+', raw.strip())
-        if not idx_match:
-            return jsonify({"error": "Could not identify which remark to remove."}), 400
-        idx = int(idx_match.group())
-        if idx < 0 or idx >= len(_remarks):
-            return jsonify({"error": f"Remark index {idx} out of range."}), 400
-
-        removed = _remarks.pop(idx)
-        _save_remarks(_remarks)
-        log.info(f"[ROUTE /remove-remark] removed idx={idx} job={removed.get('job_name','?')} remaining={len(_remarks)}")
-        failed_24h, critical_repos, incomplete_jobs = _fetch_health_data()
-        email_html = generate_health_email(failed_24h, critical_repos, incomplete_jobs, list(_remarks))
-        job = removed.get('job_name', 'Unknown')
-        obj = removed.get('vm_object', '')
-        ctx = job + (f" / {obj}" if obj and obj != 'Unknown' else "")
-        return jsonify({
-            "html": email_html,
-            "message": f"Removed remark for **{ctx}**. {len(_remarks)} remark(s) remaining."
-        })
-    except Exception as e:
-        log.error(f"[ROUTE /remove-remark] error={e}")
-        return jsonify({"error": str(e)}), 500
+    new = data.get("remarks", {})
+    for k, v in new.items():
+        if v.strip():
+            _remarks[k] = v.strip()
+        elif k in _remarks:
+            del _remarks[k]
+    _save_remarks(_remarks)
+    log.info(f"[ROUTE /set-remarks] total={len(_remarks)} remarks")
+    failed_24h, critical_repos, incomplete_jobs = _fetch_health_data()
+    email_html = generate_health_email(failed_24h, critical_repos, incomplete_jobs, dict(_remarks))
+    return jsonify({"success": True, "html": email_html, "count": len(_remarks)})
 
 
 @app.route("/clear-remarks", methods=["POST"])
@@ -1073,7 +989,9 @@ def clear_remarks():
     _remarks.clear()
     _save_remarks(_remarks)
     log.info(f"[ROUTE /clear-remarks] cleared {count} remark(s)")
-    return jsonify({"success": True, "message": "All remarks cleared."})
+    failed_24h, critical_repos, incomplete_jobs = _fetch_health_data()
+    email_html = generate_health_email(failed_24h, critical_repos, incomplete_jobs, {})
+    return jsonify({"success": True, "html": email_html, "message": "All remarks cleared."})
 
 
 @app.route("/send-healthcheck", methods=["POST"])

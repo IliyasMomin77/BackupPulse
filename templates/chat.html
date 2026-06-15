@@ -134,6 +134,7 @@ textarea::placeholder{color:var(--muted)}
     </select>
     <span class="pulse"></span>
     <button class="health-btn" onclick="healthReport()">&#x1F4CA; Health Report</button>
+    <button class="health-btn" onclick="openRemarksModal()" style="background:#1D4ED8" id="remarks-hdr-btn">&#x1F4DD; Remarks</button>
     <div class="snow-dd-wrap">
       <button class="snow-dd-btn" id="snow-dd-btn" onclick="toggleSnowMenu()">&#x1F3AB; SNOW &#x25BE;</button>
       <div class="snow-dd-menu" id="snow-dd-menu">
@@ -283,6 +284,38 @@ textarea::placeholder{color:var(--muted)}
     <div class="snow-footer">
       <button class="close-btn" onclick="closeSearchIM()">Cancel</button>
       <button class="snow-btn-submit" id="si-submit" onclick="submitSearchIM()">&#x1F50D; Search</button>
+    </div>
+  </div>
+</div>
+
+<!-- Remarks Modal — centered, full overlay -->
+<div id="remarks-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1200;overflow-y:auto;padding:20px">
+  <div style="max-width:720px;margin:40px auto;background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.7);overflow:hidden">
+    <div style="padding:14px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)">
+      <span style="font-size:14px;font-weight:600">&#x1F4DD; Update Remarks &mdash; Failed Jobs</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button onclick="clearAllRemarks()" style="background:none;border:1px solid var(--fail);color:var(--fail);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">&#x1F5D1; Clear All</button>
+        <button onclick="closeRemarksModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1">&#x2715;</button>
+      </div>
+    </div>
+    <div id="rm-body" style="padding:18px;max-height:65vh;overflow-y:auto">
+      <div id="rm-loading" style="text-align:center;color:var(--muted);padding:30px">Loading failed jobs&hellip;</div>
+      <table id="rm-table" style="display:none;width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">VM / Object</th>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">Job</th>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">Server</th>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">Date</th>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">Remark</th>
+        </tr></thead>
+        <tbody id="rm-rows"></tbody>
+      </table>
+      <div id="rm-empty" style="display:none;text-align:center;color:var(--muted);padding:30px">No failed jobs in the last 24 hours.</div>
+    </div>
+    <div id="rm-status" style="padding:0 18px 4px;font-size:12px;color:var(--muted);min-height:18px"></div>
+    <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end">
+      <button onclick="closeRemarksModal()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:8px 18px;font-size:13px;cursor:pointer">Cancel</button>
+      <button id="rm-save" onclick="saveRemarks()" style="background:#16A34A;border:none;color:#fff;border-radius:8px;padding:8px 22px;font-size:13px;font-weight:600;cursor:pointer">&#x1F4BE; Save Remarks</button>
     </div>
   </div>
 </div>
@@ -478,6 +511,90 @@ async function submitSearchIM(){
   }
 }
 
+// ── Remarks modal ───────────────────────────────────────────────────────────
+async function openRemarksModal(){
+  document.getElementById('remarks-modal').style.display='block';
+  document.getElementById('rm-loading').style.display='block';
+  document.getElementById('rm-table').style.display='none';
+  document.getElementById('rm-empty').style.display='none';
+  document.getElementById('rm-status').textContent='';
+  document.getElementById('rm-save').disabled=false;
+  try{
+    const r=await fetch('/failed-jobs-list');
+    const d=await r.json();
+    document.getElementById('rm-loading').style.display='none';
+    if(d.error){document.getElementById('rm-status').textContent='⚠️ '+d.error;return;}
+    if(!d.jobs||d.jobs.length===0){document.getElementById('rm-empty').style.display='block';return;}
+    const tbody=document.getElementById('rm-rows');
+    tbody.innerHTML='';
+    for(const j of d.jobs){
+      const tr=document.createElement('tr');
+      const inputId='rm-'+btoa(j.key).replace(/[^a-zA-Z0-9]/g,'').substring(0,20);
+      tr.innerHTML=`
+        <td style="padding:7px 10px;border-bottom:1px solid var(--border)"><b>${esc(j.object)}</b></td>
+        <td style="padding:7px 10px;border-bottom:1px solid var(--border);color:var(--muted)">${esc(j.job_name)}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid var(--border);color:var(--muted)">${esc(j.vbr_server)}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid var(--border);color:var(--muted);white-space:nowrap">${esc(j.backup_date)}</td>
+        <td style="padding:5px 10px;border-bottom:1px solid var(--border)">
+          <input id="${inputId}" data-key="${esc(j.key)}" type="text" value="${esc(j.remark)}"
+            placeholder="e.g. CBT reset done, monitoring..."
+            style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:12px;font-family:inherit;outline:none">
+        </td>`;
+      tbody.appendChild(tr);
+    }
+    document.getElementById('rm-table').style.display='table';
+  }catch(e){
+    document.getElementById('rm-loading').style.display='none';
+    document.getElementById('rm-status').textContent='⚠️ Connection error';
+  }
+}
+function closeRemarksModal(){document.getElementById('remarks-modal').style.display='none';}
+
+async function saveRemarks(){
+  const inputs=document.querySelectorAll('#rm-rows input[data-key]');
+  const remarks={};
+  inputs.forEach(inp=>{ remarks[inp.dataset.key]=inp.value; });
+  document.getElementById('rm-save').disabled=true;
+  document.getElementById('rm-save').textContent='Saving…';
+  document.getElementById('rm-status').textContent='';
+  try{
+    const r=await fetch('/set-remarks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({remarks})});
+    const d=await r.json();
+    if(d.success){
+      _healthHtml=d.html;
+      if(document.getElementById('modal').style.display==='block'){
+        document.getElementById('email-frame').srcdoc=_healthHtml;
+      }
+      const n=d.count;
+      document.getElementById('rm-status').style.color='#16A34A';
+      document.getElementById('rm-status').textContent=`✅ ${n} remark(s) saved — report updated`;
+      addMsg('bot',`&#x1F4DD; Remarks saved (${n} job${n===1?'':'s'}). Report updated with inline remarks.`);
+      setTimeout(closeRemarksModal,1400);
+    }else{
+      document.getElementById('rm-status').textContent='⚠️ '+(d.error||'Save failed');
+      document.getElementById('rm-save').disabled=false;document.getElementById('rm-save').textContent='💾 Save Remarks';
+    }
+  }catch(e){
+    document.getElementById('rm-status').textContent='⚠️ Connection error';
+    document.getElementById('rm-save').disabled=false;document.getElementById('rm-save').textContent='💾 Save Remarks';
+  }
+}
+
+async function clearAllRemarks(){
+  if(!confirm('Clear all remarks from the report?'))return;
+  const r=await fetch('/clear-remarks',{method:'POST'});
+  const d=await r.json();
+  if(d.success){
+    _healthHtml=d.html;
+    if(document.getElementById('modal').style.display==='block'){
+      document.getElementById('email-frame').srcdoc=_healthHtml;
+    }
+    addMsg('bot','All remarks cleared. &#x1F5D1;&#xFE0F;');
+    closeRemarksModal();
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const HEALTH_TRIGGERS=[
   'health report','healthcheck','health check',
   'backup report','backup health','backup status report',
@@ -537,59 +654,16 @@ async function send(){
     return;
   }
 
-  if(isRemoveRequest(q)){
-    btn.disabled=true;
-    const tr=addTyping();
-    try{
-      const r=await fetch('/remove-remark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:q})});
-      const d=await r.json();
-      tr.remove();
-      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
-      else{
-        addMsg('bot',renderMd(d.message));
-        _healthHtml=d.html;
-        if(document.getElementById('modal').style.display==='block'){
-          document.getElementById('email-frame').srcdoc=_healthHtml;
-        } else {
-          document.getElementById('modal').style.display='block';
-          document.getElementById('modal-status').style.display='none';
-          document.getElementById('email-frame').srcdoc=_healthHtml;
-        }
-      }
-    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
-    btn.disabled=false;ta.focus();
-    return;
-  }
-
-  if(isClearRequest(q)){
-    await fetch('/clear-remarks',{method:'POST'});
-    addMsg('bot','All remarks cleared. &#x1F5D1;&#xFE0F; The report is back to its original state.');
-    if(document.getElementById('modal').style.display==='block') healthReport();
+  if(isRemoveRequest(q)||isRemarkRequest(q)){
+    addMsg('bot','Opening the <b>&#x1F4DD; Remarks</b> panel — add or clear remarks per failed job, then save.');
+    openRemarksModal();
     ta.focus();
     return;
   }
 
-  if(isRemarkRequest(q)){
-    btn.disabled=true;
-    const tr=addTyping();
-    try{
-      const r=await fetch('/add-remark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:q})});
-      const d=await r.json();
-      tr.remove();
-      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
-      else{
-        addMsg('bot',renderMd(d.message+'\n\nThe report has been updated with this remark. &#x1F4DD;'));
-        _healthHtml=d.html;
-        if(document.getElementById('modal').style.display==='block'){
-          document.getElementById('email-frame').srcdoc=_healthHtml;
-        } else {
-          document.getElementById('modal').style.display='block';
-          document.getElementById('modal-status').style.display='none';
-          document.getElementById('email-frame').srcdoc=_healthHtml;
-        }
-      }
-    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
-    btn.disabled=false;ta.focus();
+  if(isClearRequest(q)){
+    clearAllRemarks();
+    ta.focus();
     return;
   }
 
