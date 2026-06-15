@@ -307,12 +307,8 @@ function addTyping(){
   return row;
 }
 
-const SNOW_LIST_TRIGGERS=[
-  'list im','list incident','list ticket','show im','show incident','show ticket',
-  'get incident','all incident','my incident','raised im','raised incident',
-  'open incident','open im','incidents raised','tickets raised','what incident','which incident'
-];
-function isSnowListRequest(q){const l=q.toLowerCase();return SNOW_LIST_TRIGGERS.some(t=>l.includes(t));}
+const SNOW_LIST_RE=/\b(list|show|get|fetch|display)\b.{0,20}\b(im|incident|ticket)s?\b|\b(im|incident|ticket)s?\b.{0,20}\b(list|raised|open|created)\b/i;
+function isSnowListRequest(q){return SNOW_LIST_RE.test(q);}
 
 const HEALTH_TRIGGERS=[
   'health report','healthcheck','health check',
