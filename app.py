@@ -777,8 +777,8 @@ def list_incidents_route():
             auth=HTTPBasicAuth(SNOW_USER, SNOW_PASS),
             headers={"Accept": "application/json"},
             params={
-                "sysparm_fields":  "number,short_description,description,state,urgency,opened_at",
-                "sysparm_query":   "category=infrastructure^subcategory=backup",
+                "sysparm_fields":  "number,short_description,description,state,urgency,opened_at,caller_id",
+                "sysparm_query":   f"caller_id.user_name={SNOW_USER}",
                 "sysparm_limit":   20,
                 "sysparm_orderby": "opened_at^DESC",
             },
