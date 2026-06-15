@@ -99,18 +99,28 @@ textarea::placeholder{color:var(--muted)}
 .snow-status{padding:10px 18px;font-size:12px;display:none}
 
 /* Email Preview Modal */
-#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:1000;padding:16px;overflow-y:auto}
-.modal-card{max-width:780px;margin:0 auto;background:var(--surface);border-radius:14px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.6)}
-.modal-hdr{padding:14px 18px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);flex-wrap:wrap}
-.modal-title{font-size:14px;font-weight:600;flex-shrink:0}
-#email-to{flex:1;min-width:180px;padding:7px 12px;background:var(--bg);border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;transition:border-color .2s}
+#modal{display:none;position:fixed;inset:0;z-index:1000;pointer-events:none}
+.modal-card{position:fixed;top:55px;width:800px;max-width:calc(100vw - 40px);background:var(--surface);border-radius:14px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.7);pointer-events:all}
+.modal-hdr{padding:12px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);cursor:grab;user-select:none}
+.modal-hdr:active{cursor:grabbing}
+.modal-title{font-size:13px;font-weight:600;flex-shrink:0}
+#email-to{flex:1;min-width:140px;padding:6px 10px;background:var(--bg);border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;transition:border-color .2s;cursor:text}
 #email-to:focus{border-color:var(--accent)}
-.send-email-btn{padding:8px 16px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;font-weight:600;transition:background .2s;white-space:nowrap}
+.send-email-btn{padding:7px 14px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;font-weight:600;transition:background .2s;white-space:nowrap}
 .send-email-btn:hover{background:#15803d}.send-email-btn:disabled{opacity:.5;cursor:not-allowed}
-.close-btn{padding:8px 12px;background:var(--surface2);border:none;border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer}
+.close-btn{padding:6px 12px;background:var(--surface2);border:none;border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer}
 .close-btn:hover{color:var(--text)}
 #modal-status{display:none;padding:10px 18px;font-size:13px}
-#email-frame{width:100%;height:72vh;border:none;display:block;background:#fff}
+#email-frame{width:100%;height:70vh;border:none;display:block;background:#fff}
+.modal-card.minimized #email-frame,.modal-card.minimized #modal-status{display:none!important}
+/* Remarks Modal */
+#remarks-modal{display:none;position:fixed;inset:0;z-index:1200;pointer-events:none}
+.rm-card{position:fixed;top:55px;width:740px;max-width:calc(100vw - 40px);background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.7);overflow:hidden;pointer-events:all}
+.rm-hdr{padding:13px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);cursor:grab;user-select:none}
+.rm-hdr:active{cursor:grabbing}
+.rm-body-wrap{padding:16px;max-height:60vh;overflow-y:auto}
+.rm-footer{padding:11px 16px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+.rm-card.minimized .rm-body-wrap,.rm-card.minimized .rm-footer,.rm-card.minimized #rm-status{display:none!important}
 </style>
 </head>
 <body>
@@ -174,12 +184,13 @@ textarea::placeholder{color:var(--muted)}
 
 <!-- Email Preview Modal -->
 <div id="modal">
-  <div class="modal-card">
+  <div class="modal-card" id="email-modal-card">
     <div class="modal-hdr">
       <span class="modal-title">&#x1F4E7; Email Preview</span>
       <input id="email-to" type="email" placeholder="recipient@company.com" value="{{ email_to }}">
       <button class="send-email-btn" id="send-email-btn" onclick="sendEmail()">&#x2709;&#xFE0F; Send Email</button>
-      <button class="close-btn" onclick="closeModal()">&#x2715; Close</button>
+      <button class="snow-min-btn" onclick="toggleSnowMin('email-modal-card')" title="Minimize">&#x2212;</button>
+      <button class="close-btn" onclick="closeModal()">&#x2715;</button>
     </div>
     <div id="modal-status"></div>
     <iframe id="email-frame" srcdoc=""></iframe>
@@ -288,17 +299,18 @@ textarea::placeholder{color:var(--muted)}
   </div>
 </div>
 
-<!-- Remarks Modal — centered, full overlay -->
-<div id="remarks-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1200;overflow-y:auto;padding:20px">
-  <div style="max-width:720px;margin:40px auto;background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.7);overflow:hidden">
-    <div style="padding:14px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)">
-      <span style="font-size:14px;font-weight:600">&#x1F4DD; Update Remarks &mdash; Failed Jobs</span>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button onclick="clearAllRemarks()" style="background:none;border:1px solid var(--fail);color:var(--fail);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">&#x1F5D1; Clear All</button>
-        <button onclick="closeRemarksModal()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1">&#x2715;</button>
+<!-- Remarks Modal -->
+<div id="remarks-modal">
+  <div class="rm-card" id="rm-card">
+    <div class="rm-hdr">
+      <span style="font-size:13px;font-weight:600">&#x1F4DD; Update Remarks &mdash; Failed Jobs</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button onclick="clearAllRemarks()" style="background:none;border:1px solid var(--fail);color:var(--fail);border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer">&#x1F5D1; Clear All</button>
+        <button class="snow-min-btn" onclick="toggleSnowMin('rm-card')" title="Minimize">&#x2212;</button>
+        <button onclick="closeRemarksModal()" style="background:none;border:none;color:var(--muted);font-size:17px;cursor:pointer;line-height:1;padding:2px 6px">&#x2715;</button>
       </div>
     </div>
-    <div id="rm-body" style="padding:18px;max-height:65vh;overflow-y:auto">
+    <div id="rm-body" class="rm-body-wrap">
       <div id="rm-loading" style="text-align:center;color:var(--muted);padding:30px">Loading failed jobs&hellip;</div>
       <table id="rm-table" style="display:none;width:100%;border-collapse:collapse;font-size:13px">
         <thead><tr>
@@ -312,10 +324,10 @@ textarea::placeholder{color:var(--muted)}
       </table>
       <div id="rm-empty" style="display:none;text-align:center;color:var(--muted);padding:30px">No failed jobs in the last 24 hours.</div>
     </div>
-    <div id="rm-status" style="padding:0 18px 4px;font-size:12px;color:var(--muted);min-height:18px"></div>
-    <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end">
-      <button onclick="closeRemarksModal()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:8px 18px;font-size:13px;cursor:pointer">Cancel</button>
-      <button id="rm-save" onclick="saveRemarks()" style="background:#16A34A;border:none;color:#fff;border-radius:8px;padding:8px 22px;font-size:13px;font-weight:600;cursor:pointer">&#x1F4BE; Save Remarks</button>
+    <div id="rm-status" style="padding:0 16px 4px;font-size:12px;color:var(--muted);min-height:18px"></div>
+    <div class="rm-footer">
+      <button onclick="closeRemarksModal()" class="close-btn">Cancel</button>
+      <button id="rm-save" onclick="saveRemarks()" class="send-email-btn">&#x1F4BE; Save Remarks</button>
     </div>
   </div>
 </div>
@@ -435,33 +447,47 @@ function toggleSnowMin(cardId){
   btn.innerHTML=card.classList.contains('minimized')?'&#x25A1;':'&#x2212;';
 }
 
-// Drag — attach once for all .snow-card elements
-(function(){
-  let dc=null,ox=0,oy=0;
-  document.querySelectorAll('.snow-card').forEach(function(card){
-    card.querySelector('.snow-hdr').addEventListener('mousedown',function(e){
-      if(e.target.closest('button'))return;
-      const r=card.getBoundingClientRect();
-      card.style.right='auto';
-      card.style.left=r.left+'px';
-      card.style.top=r.top+'px';
-      dc=card;ox=e.clientX-r.left;oy=e.clientY-r.top;
-      e.preventDefault();
-    });
+// Drag — all floating cards (SNOW + email + remarks)
+function _attachDrag(card, hdrSel){
+  const hdr=card.querySelector(hdrSel);
+  if(!hdr)return;
+  hdr.addEventListener('mousedown',function(e){
+    if(e.target.closest('button')||e.target.closest('input'))return;
+    const r=card.getBoundingClientRect();
+    card.style.transform='none';card.style.right='auto';
+    card.style.left=r.left+'px';card.style.top=r.top+'px';
+    _dc=card;_ox=e.clientX-r.left;_oy=e.clientY-r.top;
+    e.preventDefault();
   });
+}
+let _dc=null,_ox=0,_oy=0;
+(function(){
+  document.querySelectorAll('.snow-card').forEach(c=>_attachDrag(c,'.snow-hdr'));
+  _attachDrag(document.getElementById('email-modal-card'),'.modal-hdr');
+  _attachDrag(document.getElementById('rm-card'),'.rm-hdr');
   document.addEventListener('mousemove',function(e){
-    if(!dc)return;
-    dc.style.left=(e.clientX-ox)+'px';
-    dc.style.top=Math.max(0,e.clientY-oy)+'px';
+    if(!_dc)return;
+    _dc.style.left=(e.clientX-_ox)+'px';
+    _dc.style.top=Math.max(0,e.clientY-_oy)+'px';
   });
   document.addEventListener('mouseup',function(){dc=null;});
 })();
 
 function _resetCard(cardId){
   const card=document.getElementById(cardId);
-  card.style.left='';card.style.top='';card.style.right='';
+  card.style.left='';card.style.top='';card.style.right='';card.style.transform='';
   card.classList.remove('minimized');
   card.querySelector('.snow-min-btn').innerHTML='&#x2212;';
+}
+function _positionCenter(cardId){
+  const card=document.getElementById(cardId);
+  const w=card.offsetWidth||800;
+  card.style.left=Math.max(20,Math.round((window.innerWidth-w)/2))+'px';
+  card.style.top='55px';
+  card.style.transform='none';
+  card.classList.remove('minimized');
+  const mb=card.querySelector('.snow-min-btn');
+  if(mb)mb.innerHTML='&#x2212;';
 }
 
 function openSearchIM(){
@@ -513,6 +539,7 @@ async function submitSearchIM(){
 
 // ── Remarks modal ───────────────────────────────────────────────────────────
 async function openRemarksModal(){
+  _positionCenter('rm-card');
   document.getElementById('remarks-modal').style.display='block';
   document.getElementById('rm-loading').style.display='block';
   document.getElementById('rm-table').style.display='none';
@@ -683,6 +710,7 @@ async function send(){
 }
 
 async function healthReport(){
+  _positionCenter('email-modal-card');
   document.getElementById('modal').style.display='block';
   document.getElementById('modal-status').style.display='none';
   document.getElementById('email-frame').srcdoc=
