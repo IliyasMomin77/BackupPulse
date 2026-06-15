@@ -778,6 +778,7 @@ def list_incidents_route():
             headers={"Accept": "application/json"},
             params={
                 "sysparm_fields":  "number,short_description,description,state,urgency,opened_at",
+                "sysparm_query":   "category=infrastructure^subcategory=backup",
                 "sysparm_limit":   20,
                 "sysparm_orderby": "opened_at^DESC",
             },
