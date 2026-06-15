@@ -470,7 +470,7 @@ let _dc=null,_ox=0,_oy=0;
     _dc.style.left=(e.clientX-_ox)+'px';
     _dc.style.top=Math.max(0,e.clientY-_oy)+'px';
   });
-  document.addEventListener('mouseup',function(){dc=null;});
+  document.addEventListener('mouseup',function(){_dc=null;});
 })();
 
 function _resetCard(cardId){
