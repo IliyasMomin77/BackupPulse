@@ -68,15 +68,22 @@ textarea::placeholder{color:var(--muted)}
 .send svg{width:15px;height:15px;fill:#fff}
 .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:7px}
 
-/* ServiceNow Resolve Form */
-.snow-form{margin-top:10px;display:flex;flex-direction:column;gap:10px}
-.snow-form label{font-size:11px;color:var(--muted);margin-bottom:2px;display:block}
-.snow-form select,.snow-form textarea{width:100%;background:var(--bg);border:1.5px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;outline:none;transition:border-color .2s}
-.snow-form select:focus,.snow-form textarea:focus{border-color:var(--accent)}
-.snow-form textarea{resize:vertical;min-height:72px}
-.snow-submit{padding:8px 18px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;align-self:flex-start;transition:background .2s}
-.snow-submit:hover{background:#15803d}
-.snow-submit:disabled{opacity:.5;cursor:not-allowed}
+/* ServiceNow Modals */
+.snow-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:1100;padding:16px;overflow-y:auto}
+.snow-card{max-width:500px;margin:60px auto;background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.6);overflow:hidden}
+.snow-hdr{padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
+.snow-hdr-title{font-size:14px;font-weight:600}
+.snow-body{padding:18px;display:flex;flex-direction:column;gap:14px}
+.snow-field label{font-size:11px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500}
+.snow-field input,.snow-field select,.snow-field textarea{width:100%;background:var(--bg);border:1.5px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;font-family:inherit;outline:none;transition:border-color .2s}
+.snow-field input:focus,.snow-field select:focus,.snow-field textarea:focus{border-color:var(--accent)}
+.snow-field textarea{resize:vertical;min-height:80px}
+.snow-field input.err,.snow-field textarea.err{border-color:var(--fail)}
+.snow-footer{padding:14px 18px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+.snow-btn-submit{padding:9px 20px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .2s}
+.snow-btn-submit:hover{background:#15803d}
+.snow-btn-submit:disabled{opacity:.5;cursor:not-allowed}
+.snow-status{padding:10px 18px;font-size:12px;display:none}
 
 /* Email Preview Modal */
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:1000;padding:16px;overflow-y:auto}
@@ -130,8 +137,8 @@ textarea::placeholder{color:var(--muted)}
   <span class="chip" onclick="ask(this)">&#x1F4BE; VMs missing backups</span>
   <span class="chip" onclick="ask(this)">&#x23F1;&#xFE0F; Long running jobs</span>
   <span class="chip" onclick="healthReport()">&#x1F4CA; Health Report</span>
-  <span class="chip" onclick="ta.value='/Create-IM ';ta.focus()">&#x1F3AB; /Create-IM</span>
-  <span class="chip" onclick="ta.value='/Resolve-IM INC';ta.focus()">&#x2705; /Resolve-IM</span>
+  <span class="chip" onclick="openCreateIM()">&#x1F3AB; Create IM</span>
+  <span class="chip" onclick="openResolveIM('')">&#x2705; Resolve IM</span>
 </div>
 
 <div class="bar">
@@ -155,6 +162,78 @@ textarea::placeholder{color:var(--muted)}
     </div>
     <div id="modal-status"></div>
     <iframe id="email-frame" srcdoc=""></iframe>
+  </div>
+</div>
+
+<!-- Create IM Modal -->
+<div class="snow-modal" id="snow-create-modal">
+  <div class="snow-card">
+    <div class="snow-hdr">
+      <span class="snow-hdr-title">&#x1F3AB; Create ServiceNow Incident</span>
+      <button class="close-btn" onclick="closeCreateIM()">&#x2715;</button>
+    </div>
+    <div class="snow-body">
+      <div class="snow-field">
+        <label>Short Description *</label>
+        <input id="ci-short" type="text" maxlength="100" placeholder="e.g. Backup failure — WApp03">
+      </div>
+      <div class="snow-field">
+        <label>Details *</label>
+        <textarea id="ci-desc" placeholder="Describe the backup issue in detail..."></textarea>
+      </div>
+      <div class="snow-field">
+        <label>Urgency</label>
+        <select id="ci-urgency">
+          <option value="1">1 — Critical</option>
+          <option value="2" selected>2 — High</option>
+          <option value="3">3 — Medium</option>
+        </select>
+      </div>
+      <div class="snow-field">
+        <label>Affected Object / VM (optional)</label>
+        <input id="ci-object" type="text" placeholder="e.g. WApp03, Linux_VM_Job, VBR1">
+      </div>
+    </div>
+    <div id="ci-status" class="snow-status"></div>
+    <div class="snow-footer">
+      <button class="close-btn" onclick="closeCreateIM()">Cancel</button>
+      <button class="snow-btn-submit" id="ci-submit" onclick="submitCreateIM()">&#x1F3AB; Create Incident</button>
+    </div>
+  </div>
+</div>
+
+<!-- Resolve IM Modal -->
+<div class="snow-modal" id="snow-resolve-modal">
+  <div class="snow-card">
+    <div class="snow-hdr">
+      <span class="snow-hdr-title">&#x2705; Resolve ServiceNow Incident</span>
+      <button class="close-btn" onclick="closeResolveIM()">&#x2715;</button>
+    </div>
+    <div class="snow-body">
+      <div class="snow-field">
+        <label>Incident Number *</label>
+        <input id="ri-inc" type="text" placeholder="INC0010001">
+      </div>
+      <div class="snow-field">
+        <label>Resolution Code *</label>
+        <select id="ri-code">
+          <option value="Solved (Permanently)">Solved (Permanently)</option>
+          <option value="Solved (Work Around)">Solved (Work Around)</option>
+          <option value="Not Solved (Not Reproducible)">Not Solved (Not Reproducible)</option>
+          <option value="Not Solved (Too Costly)">Not Solved (Too Costly)</option>
+          <option value="Closed/Resolved by Caller">Closed/Resolved by Caller</option>
+        </select>
+      </div>
+      <div class="snow-field">
+        <label>Resolution Notes * (what was done to fix it)</label>
+        <textarea id="ri-notes" placeholder="Describe the steps taken to resolve the issue..."></textarea>
+      </div>
+    </div>
+    <div id="ri-status" class="snow-status"></div>
+    <div class="snow-footer">
+      <button class="close-btn" onclick="closeResolveIM()">Cancel</button>
+      <button class="snow-btn-submit" id="ri-submit" onclick="submitResolveIM()">&#x2705; Resolve Incident</button>
+    </div>
   </div>
 </div>
 
@@ -228,10 +307,7 @@ function addTyping(){
   return row;
 }
 
-const SNOW_CREATE_CMD=/^\/create-im\b/i;
-const SNOW_RESOLVE_CMD=/^\/resolve-im\s+(INC\d+)/i;
-
-
+const HEALTH_TRIGGERS=[
   'health report','healthcheck','health check',
   'backup report','backup health','backup status report',
   'generate report','show report','open report',
@@ -282,31 +358,6 @@ async function send(){
   if(!q||btn.disabled)return;
   addMsg('user',esc(q));
   ta.value='';ta.style.height='auto';
-
-  // /Create-IM — extract description after command and create incident
-  if(SNOW_CREATE_CMD.test(q)){
-    const desc=q.replace(/^\/create-im\s*/i,'').trim()||'Backup issue reported';
-    btn.disabled=true;
-    const tr=addTyping();
-    try{
-      const r=await fetch('/create-incident',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:desc})});
-      const d=await r.json();
-      tr.remove();
-      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
-      else{addMsg('bot',renderMd(d.message));}
-    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
-    btn.disabled=false;ta.focus();
-    return;
-  }
-
-  // /Resolve-IM INC#### — show resolve form directly
-  const resolveMatch=q.match(SNOW_RESOLVE_CMD);
-  if(resolveMatch){
-    const incNumber=resolveMatch[1].toUpperCase();
-    addSnowResolveForm(`To resolve **${incNumber}**, fill in the mandatory fields below:`, incNumber);
-    ta.focus();
-    return;
-  }
 
   if(isHealthRequest(q)){
     addMsg('bot','Sure! Opening the backup health report now — review it and send when ready. &#x1F4CA;');
@@ -444,52 +495,92 @@ function closeModal(){
   document.getElementById('modal-status').style.display='none';
 }
 
-function addSnowResolveForm(introText, incNumber){
-  const row=document.createElement('div');row.className='row';
-  const av=document.createElement('div');av.className='av bot';av.textContent='V';
-  const bub=document.createElement('div');bub.className='bub bot';
-  const formId='snow-form-'+incNumber;
-  bub.innerHTML=renderMd(introText)+`
-  <div class="snow-form" id="${formId}">
-    <div>
-      <label>Resolution Code *</label>
-      <select id="rc-${incNumber}">
-        <option value="Solved (Permanently)">Solved (Permanently)</option>
-        <option value="Solved (Work Around)">Solved (Work Around)</option>
-        <option value="Not Solved (Not Reproducible)">Not Solved (Not Reproducible)</option>
-        <option value="Not Solved (Too Costly)">Not Solved (Too Costly)</option>
-        <option value="Closed/Resolved by Caller">Closed/Resolved by Caller</option>
-      </select>
-    </div>
-    <div>
-      <label>Resolution Notes * (what was done to fix it)</label>
-      <textarea id="rn-${incNumber}" placeholder="Describe the resolution steps taken..."></textarea>
-    </div>
-    <button class="snow-submit" id="rsub-${incNumber}" onclick="submitResolveForm('${incNumber}')">✅ Resolve ${incNumber}</button>
-  </div>`;
-  row.append(av,bub);msgs.appendChild(row);msgs.scrollTop=msgs.scrollHeight;
+function openCreateIM(){
+  document.getElementById('ci-short').value='';
+  document.getElementById('ci-desc').value='';
+  document.getElementById('ci-object').value='';
+  document.getElementById('ci-urgency').value='2';
+  document.getElementById('ci-status').style.display='none';
+  document.getElementById('ci-submit').disabled=false;
+  document.getElementById('ci-submit').textContent='🎫 Create Incident';
+  document.getElementById('snow-create-modal').style.display='block';
+}
+function closeCreateIM(){document.getElementById('snow-create-modal').style.display='none';}
+
+function openResolveIM(incNumber){
+  document.getElementById('ri-inc').value=incNumber||'';
+  document.getElementById('ri-notes').value='';
+  document.getElementById('ri-code').value='Solved (Permanently)';
+  document.getElementById('ri-status').style.display='none';
+  document.getElementById('ri-submit').disabled=false;
+  document.getElementById('ri-submit').textContent='✅ Resolve Incident';
+  document.getElementById('snow-resolve-modal').style.display='block';
+  if(!incNumber) document.getElementById('ri-inc').focus();
+  else document.getElementById('ri-notes').focus();
+}
+function closeResolveIM(){document.getElementById('snow-resolve-modal').style.display='none';}
+
+function _snowStatus(elId, msg, color){
+  const el=document.getElementById(elId);
+  el.style.cssText=`display:block;padding:10px 18px;font-size:12px;background:${color==='ok'?'#D1FAE5':color==='err'?'#FEE2E2':'#FEF3C7'};color:${color==='ok'?'#065F46':color==='err'?'#991B1B':'#92400E'}`;
+  el.textContent=msg;
 }
 
-async function submitResolveForm(incNumber){
-  const code  = document.getElementById('rc-'+incNumber).value;
-  const notes = document.getElementById('rn-'+incNumber).value.trim();
-  const btn   = document.getElementById('rsub-'+incNumber);
-  if(!notes){
-    document.getElementById('rn-'+incNumber).style.borderColor='var(--fail)';
-    document.getElementById('rn-'+incNumber).placeholder='Resolution notes are required!';
-    return;
+async function submitCreateIM(){
+  const shortDesc=document.getElementById('ci-short').value.trim();
+  const desc=document.getElementById('ci-desc').value.trim();
+  const urgency=document.getElementById('ci-urgency').value;
+  const obj=document.getElementById('ci-object').value.trim();
+  document.getElementById('ci-short').classList.remove('err');
+  document.getElementById('ci-desc').classList.remove('err');
+  if(!shortDesc){document.getElementById('ci-short').classList.add('err');return;}
+  if(!desc){document.getElementById('ci-desc').classList.add('err');return;}
+  const fullDesc=obj?`${desc}\n\nAffected Object: ${obj}`:desc;
+  const submitBtn=document.getElementById('ci-submit');
+  submitBtn.disabled=true;submitBtn.textContent='Creating...';
+  try{
+    const r=await fetch('/create-incident',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({short_description:shortDesc,description:fullDesc,urgency:parseInt(urgency)})});
+    const d=await r.json();
+    if(d.success){
+      _snowStatus('ci-status',d.message.replace(/\*\*/g,''),'ok');
+      addMsg('bot',renderMd(d.message));
+      setTimeout(closeCreateIM,1800);
+    }else{
+      _snowStatus('ci-status',d.error||'Failed to create incident','err');
+      submitBtn.disabled=false;submitBtn.textContent='🎫 Create Incident';
+    }
+  }catch(e){
+    _snowStatus('ci-status','Connection error. Please try again.','err');
+    submitBtn.disabled=false;submitBtn.textContent='🎫 Create Incident';
   }
-  btn.disabled=true;btn.textContent='Resolving...';
+}
+
+async function submitResolveIM(){
+  const incNumber=document.getElementById('ri-inc').value.trim().toUpperCase();
+  const code=document.getElementById('ri-code').value;
+  const notes=document.getElementById('ri-notes').value.trim();
+  document.getElementById('ri-inc').classList.remove('err');
+  document.getElementById('ri-notes').classList.remove('err');
+  if(!incNumber){document.getElementById('ri-inc').classList.add('err');return;}
+  if(!notes){document.getElementById('ri-notes').classList.add('err');return;}
+  const submitBtn=document.getElementById('ri-submit');
+  submitBtn.disabled=true;submitBtn.textContent='Resolving...';
   try{
     const r=await fetch('/resolve-incident',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({inc_number:incNumber,resolution_code:code,resolution_notes:notes})});
     const d=await r.json();
-    document.getElementById('snow-form-'+incNumber).remove();
-    if(d.success){addMsg('bot',renderMd(d.message));}
-    else{addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error||'Failed to resolve incident'));}
+    if(d.success){
+      _snowStatus('ri-status',d.message.replace(/\*\*/g,''),'ok');
+      addMsg('bot',renderMd(d.message));
+      setTimeout(closeResolveIM,1800);
+    }else{
+      _snowStatus('ri-status',d.error||'Failed to resolve incident','err');
+      submitBtn.disabled=false;submitBtn.textContent='✅ Resolve Incident';
+    }
   }catch(e){
-    btn.disabled=false;btn.textContent='✅ Resolve '+incNumber;
-    addMsg('err','&#x26A0;&#xFE0F; Connection error.');
+    _snowStatus('ri-status','Connection error. Please try again.','err');
+    submitBtn.disabled=false;submitBtn.textContent='✅ Resolve Incident';
   }
 }
 

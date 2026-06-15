@@ -745,14 +745,16 @@ def chat():
 @app.route("/create-incident", methods=["POST"])
 def create_incident_route():
     data        = request.get_json()
-    description = data.get("description", "").strip()
-    if not description:
-        return jsonify({"error": "Description required"}), 400
-    short_desc  = description[:100]
-    log.info(f"[ROUTE /create-incident] short_desc={short_desc!r}")
+    short_desc  = data.get("short_description", data.get("description", "")).strip()[:100]
+    description = data.get("description", short_desc).strip()
+    urgency     = int(data.get("urgency", 2))
+    if not short_desc:
+        return jsonify({"error": "Short description required"}), 400
+    urgency_label = {1: "Critical", 2: "High", 3: "Medium"}.get(urgency, "High")
+    log.info(f"[ROUTE /create-incident] short_desc={short_desc!r} urgency={urgency}")
     try:
-        inc_number, inc_url = create_snow_incident(short_desc, description, urgency=2)
-        return jsonify({"success": True, "message": f"✅ Incident **{inc_number}** created in ServiceNow.\n\n**Summary:** {short_desc}\n**Priority:** High\n**View:** {inc_url}"})
+        inc_number, inc_url = create_snow_incident(short_desc, description, urgency=urgency)
+        return jsonify({"success": True, "message": f"✅ Incident **{inc_number}** created in ServiceNow.\n\n**Summary:** {short_desc}\n**Priority:** {urgency_label}\n**View:** {inc_url}"})
     except Exception as e:
         log.error(f"[ROUTE /create-incident] error={e}")
         return jsonify({"error": str(e)}), 500
