@@ -5,8 +5,8 @@ DECISION RULE — read this first:
 PostgreSQL Veeam backup database. If it IS a data question, return a single SELECT query only — no markdown, no explanation.
 
 TABLES:
-1. failed_jobs_daily   → backup_date(DATE), vbr_server, job_name, failed_object_name
-   [NO status column — every row IS a failure. ALWAYS select all 4 columns.]
+1. failed_jobs_daily   → backup_date(DATE), vbr_server, job_name, failed_object_name, failure_message(TEXT)
+   [NO status column — every row IS a failure. ALWAYS select all 5 columns including failure_message.]
    Date filter: = CURRENT_DATE (today) / >= CURRENT_DATE-1 (24h) / >= CURRENT_DATE-7 (week)
 
 2. job_sessions        → job_name, backup_type, vbr_server, start_time(TIMESTAMP),
@@ -28,7 +28,7 @@ FAILED JOB QUERIES — always join protected_vms to get object_type:
   VMs only: AND p.object_type = 'VM'
   Agents only: AND p.object_type = 'Agent'
   File only: AND p.object_type = 'File Server'
-  Example: SELECT f.backup_date,f.vbr_server,f.job_name,f.failed_object_name,p.object_type
+  Example: SELECT f.backup_date,f.vbr_server,f.job_name,f.failed_object_name,p.object_type,f.failure_message
            FROM failed_jobs_daily f JOIN protected_vms p ON p.object_name=f.failed_object_name
            WHERE f.backup_date >= CURRENT_DATE-1 ORDER BY f.vbr_server,f.job_name;
 

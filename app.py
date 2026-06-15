@@ -323,19 +323,25 @@ def _format_rows(question, rows):
         from collections import defaultdict
         grouped = defaultdict(lambda: defaultdict(list))
         for r in rows[:60]:
-            srv, job, obj = r.get("vbr_server","?"), r.get("job_name","?"), r.get("failed_object_name","?")
+            srv  = r.get("vbr_server", "?")
+            job  = r.get("job_name", "?")
+            obj  = r.get("failed_object_name", "?")
             otype = r.get("object_type", "")
+            msg  = r.get("failure_message", "")
             label = f"{obj}" + (f" ({otype})" if otype else "")
-            if label not in grouped[srv][job]:
-                grouped[srv][job].append(label)
+            entry = (label, msg)
+            if entry not in grouped[srv][job]:
+                grouped[srv][job].append(entry)
         total = sum(len(o) for s in grouped.values() for o in s.values())
         lines = [f"**{total} failed backup(s):**\n"]
         for srv, jobs in grouped.items():
             lines.append(f"**{srv}**")
-            for job, objs in jobs.items():
+            for job, entries in jobs.items():
                 lines.append(f"  • {job}")
-                for o in objs:
-                    lines.append(f"    – {o} ❌")
+                for label, msg in entries:
+                    lines.append(f"    – {label} ❌")
+                    if msg:
+                        lines.append(f"      _{msg}_")
         lines.append("\nReview and retry failed jobs or check the affected servers.")
         return "\n".join(lines)
 
