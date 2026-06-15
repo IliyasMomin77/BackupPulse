@@ -154,6 +154,7 @@ CREATE_STATEMENTS = [
         vbr_server          VARCHAR(50),
         job_name            VARCHAR(255),
         failed_object_name  VARCHAR(255),
+        failure_message     TEXT,
         pulled_at           TIMESTAMP DEFAULT NOW()
     )""",
     """CREATE TABLE IF NOT EXISTS job_sessions (
@@ -233,6 +234,11 @@ TABLES = [
 def create_tables(cur):
     for stmt in CREATE_STATEMENTS:
         cur.execute(stmt)
+    # Add new columns to existing tables without dropping data
+    cur.execute("""
+        ALTER TABLE failed_jobs_daily
+        ADD COLUMN IF NOT EXISTS failure_message TEXT
+    """)
 
 def truncate_tables(cur):
     for t in TABLES:
@@ -331,9 +337,9 @@ def insert_failed_jobs_daily(cur):
                 jname, _, vbr = OBJ_TO_JOB[obj]
                 cur.execute(
                     """INSERT INTO failed_jobs_daily
-                       (backup_date, vbr_server, job_name, failed_object_name)
-                       VALUES (%s,%s,%s,%s)""",
-                    (run_date, vbr, jname, obj),
+                       (backup_date, vbr_server, job_name, failed_object_name, failure_message)
+                       VALUES (%s,%s,%s,%s,%s)""",
+                    (run_date, vbr, jname, obj, fail_msg_for(obj)),
                 )
                 count += 1
         # Occasional random failure from a healthy object
@@ -342,9 +348,9 @@ def insert_failed_jobs_daily(cur):
             jname, _, vbr = OBJ_TO_JOB[obj]
             cur.execute(
                 """INSERT INTO failed_jobs_daily
-                   (backup_date, vbr_server, job_name, failed_object_name)
-                   VALUES (%s,%s,%s,%s)""",
-                (run_date, vbr, jname, obj),
+                   (backup_date, vbr_server, job_name, failed_object_name, failure_message)
+                   VALUES (%s,%s,%s,%s,%s)""",
+                (run_date, vbr, jname, obj, fail_msg_for(obj)),
             )
             count += 1
     print(f"  Failed jobs daily: {count} rows")
