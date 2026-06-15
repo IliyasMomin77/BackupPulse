@@ -684,6 +684,8 @@ def _filter_dt(value):
 
 
 def generate_health_email(failed_24h, critical_repos, incomplete_jobs, remarks=None):
+    if not isinstance(remarks, dict):
+        remarks = {}
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     has_issues = bool(failed_24h or critical_repos or incomplete_jobs)
     return render_template(
