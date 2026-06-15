@@ -429,6 +429,10 @@ _SNOW_TRIGGER = re.compile(
     r'\b(create|raise|open|log|file)\s+(im|incident|ticket|inc)\b',
     re.IGNORECASE
 )
+_SNOW_RESOLVE_TRIGGER = re.compile(
+    r'\b(resolve|close|fix|solved?|complete)\s+(im|incident|ticket|inc)\b',
+    re.IGNORECASE
+)
 
 
 def create_snow_incident(short_description, description, urgency=2, impact=2):
@@ -465,6 +469,43 @@ def create_snow_incident(short_description, description, urgency=2, impact=2):
     return inc_number, inc_url
 
 
+def resolve_snow_incident(inc_number, resolution_code, resolution_notes):
+    from requests.auth import HTTPBasicAuth
+    if not SNOW_INSTANCE or not SNOW_USER:
+        raise Exception("ServiceNow not configured.")
+    auth = HTTPBasicAuth(SNOW_USER, SNOW_PASS)
+    # Get sys_id by incident number
+    r = requests.get(
+        f"{SNOW_INSTANCE}/api/now/table/incident",
+        auth=auth,
+        headers={"Accept": "application/json"},
+        params={"sysparm_query": f"number={inc_number}", "sysparm_fields": "sys_id,number"},
+        timeout=30
+    )
+    results = r.json().get("result", [])
+    if not results:
+        raise Exception(f"Incident {inc_number} not found in ServiceNow")
+    sys_id = results[0]["sys_id"]
+    log.info(f"[SNOW] resolving {inc_number} sys_id={sys_id} code={resolution_code!r}")
+    r = requests.patch(
+        f"{SNOW_INSTANCE}/api/now/table/incident/{sys_id}",
+        auth=auth,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        json={
+            "state":      "6",
+            "close_code":  resolution_code,
+            "close_notes": resolution_notes,
+            "resolved_by": SNOW_USER,
+        },
+        timeout=30
+    )
+    if not r.ok:
+        log.error(f"[SNOW] resolve FAILED status={r.status_code} error={r.text[:200]}")
+        raise Exception(f"ServiceNow error {r.status_code}: {r.text[:200]}")
+    log.info(f"[SNOW] resolved {inc_number}")
+    return inc_number
+
+
 def process_question(question):
     t0 = time.perf_counter()
     log.info(f"[CHAT] question={question!r}")
@@ -474,6 +515,14 @@ def process_question(question):
     if _INSTANT_REPLY.match(question):
         reply = "Hey! Ask me anything about your backup environment — failed jobs, restore points, repository capacity, or generate a health report."
         log.info(f"[CHAT] instant greeting — {round(time.perf_counter()-t0,3)}s")
+
+    elif _SNOW_RESOLVE_TRIGGER.search(question):
+        m = re.search(r'\bINC\d+\b', question, re.IGNORECASE)
+        inc_number = m.group().upper() if m else None
+        if not inc_number:
+            reply = "Please include the incident number. Example: **Resolve INC0010001**"
+        else:
+            return {"answer": f"To resolve **{inc_number}**, fill in the mandatory fields below:", "snow_form": {"type": "resolve", "inc_number": inc_number}}
 
     elif _SNOW_TRIGGER.search(question):
         try:
@@ -684,11 +733,32 @@ def chat():
     if not question:
         return jsonify({"answer": "Please ask a question."})
     try:
-        answer = process_question(question)
-        return jsonify({"answer": answer})
+        result = process_question(question)
+        if isinstance(result, dict):
+            return jsonify(result)
+        return jsonify({"answer": result})
     except Exception as e:
         log.error(f"[ROUTE /chat] error={e}")
         return jsonify({"answer": "Error: " + str(e)})
+
+
+@app.route("/resolve-incident", methods=["POST"])
+def resolve_incident_route():
+    data = request.get_json()
+    inc_number      = data.get("inc_number", "").strip().upper()
+    resolution_code  = data.get("resolution_code", "Solved (Permanently)").strip()
+    resolution_notes = data.get("resolution_notes", "").strip()
+    if not inc_number:
+        return jsonify({"error": "Incident number required"}), 400
+    if not resolution_notes:
+        return jsonify({"error": "Resolution notes are required"}), 400
+    log.info(f"[ROUTE /resolve-incident] {inc_number} code={resolution_code!r}")
+    try:
+        resolve_snow_incident(inc_number, resolution_code, resolution_notes)
+        return jsonify({"success": True, "message": f"✅ Incident **{inc_number}** resolved successfully in ServiceNow."})
+    except Exception as e:
+        log.error(f"[ROUTE /resolve-incident] error={e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/healthcheck")

@@ -68,6 +68,16 @@ textarea::placeholder{color:var(--muted)}
 .send svg{width:15px;height:15px;fill:#fff}
 .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:7px}
 
+/* ServiceNow Resolve Form */
+.snow-form{margin-top:10px;display:flex;flex-direction:column;gap:10px}
+.snow-form label{font-size:11px;color:var(--muted);margin-bottom:2px;display:block}
+.snow-form select,.snow-form textarea{width:100%;background:var(--bg);border:1.5px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;outline:none;transition:border-color .2s}
+.snow-form select:focus,.snow-form textarea:focus{border-color:var(--accent)}
+.snow-form textarea{resize:vertical;min-height:72px}
+.snow-submit{padding:8px 18px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;align-self:flex-start;transition:background .2s}
+.snow-submit:hover{background:#15803d}
+.snow-submit:disabled{opacity:.5;cursor:not-allowed}
+
 /* Email Preview Modal */
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:1000;padding:16px;overflow-y:auto}
 .modal-card{max-width:780px;margin:0 auto;background:var(--surface);border-radius:14px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.6)}
@@ -336,7 +346,12 @@ async function send(){
   try{
     const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
     const d=await r.json();
-    tr.remove();addMsg('bot',renderMd(d.answer));
+    tr.remove();
+    if(d.snow_form&&d.snow_form.type==='resolve'){
+      addSnowResolveForm(d.answer, d.snow_form.inc_number);
+    } else {
+      addMsg('bot',renderMd(d.answer));
+    }
   }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error. Please try again.');}
   btn.disabled=false;ta.focus();
 }
@@ -397,6 +412,55 @@ async function sendEmail(){
 function closeModal(){
   document.getElementById('modal').style.display='none';
   document.getElementById('modal-status').style.display='none';
+}
+
+function addSnowResolveForm(introText, incNumber){
+  const row=document.createElement('div');row.className='row';
+  const av=document.createElement('div');av.className='av bot';av.textContent='V';
+  const bub=document.createElement('div');bub.className='bub bot';
+  const formId='snow-form-'+incNumber;
+  bub.innerHTML=renderMd(introText)+`
+  <div class="snow-form" id="${formId}">
+    <div>
+      <label>Resolution Code *</label>
+      <select id="rc-${incNumber}">
+        <option value="Solved (Permanently)">Solved (Permanently)</option>
+        <option value="Solved (Work Around)">Solved (Work Around)</option>
+        <option value="Not Solved (Not Reproducible)">Not Solved (Not Reproducible)</option>
+        <option value="Not Solved (Too Costly)">Not Solved (Too Costly)</option>
+        <option value="Closed/Resolved by Caller">Closed/Resolved by Caller</option>
+      </select>
+    </div>
+    <div>
+      <label>Resolution Notes * (what was done to fix it)</label>
+      <textarea id="rn-${incNumber}" placeholder="Describe the resolution steps taken..."></textarea>
+    </div>
+    <button class="snow-submit" id="rsub-${incNumber}" onclick="submitResolveForm('${incNumber}')">✅ Resolve ${incNumber}</button>
+  </div>`;
+  row.append(av,bub);msgs.appendChild(row);msgs.scrollTop=msgs.scrollHeight;
+}
+
+async function submitResolveForm(incNumber){
+  const code  = document.getElementById('rc-'+incNumber).value;
+  const notes = document.getElementById('rn-'+incNumber).value.trim();
+  const btn   = document.getElementById('rsub-'+incNumber);
+  if(!notes){
+    document.getElementById('rn-'+incNumber).style.borderColor='var(--fail)';
+    document.getElementById('rn-'+incNumber).placeholder='Resolution notes are required!';
+    return;
+  }
+  btn.disabled=true;btn.textContent='Resolving...';
+  try{
+    const r=await fetch('/resolve-incident',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({inc_number:incNumber,resolution_code:code,resolution_notes:notes})});
+    const d=await r.json();
+    document.getElementById('snow-form-'+incNumber).remove();
+    if(d.success){addMsg('bot',renderMd(d.message));}
+    else{addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error||'Failed to resolve incident'));}
+  }catch(e){
+    btn.disabled=false;btn.textContent='✅ Resolve '+incNumber;
+    addMsg('err','&#x26A0;&#xFE0F; Connection error.');
+  }
 }
 
 async function switchProvider(provider){
