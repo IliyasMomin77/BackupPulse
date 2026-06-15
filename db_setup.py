@@ -2,7 +2,11 @@
 db_setup.py — Seed demo data
 40 protected objects: 30 VM, 8 Agent, 2 File Backup
 VBR servers: VBR1, VBR2, VBR3
-4 failing objects: WApp03, LApp02, WAgt03, NAS-SRV01
+Failures:
+  Prod_VM_Job   (VBR1): WApp03, WApp04, WApp05  — same CBT error
+  Linux_VM_Job  (VBR2): LApp02, LApp03           — same VSS error
+  Prod_Agent_Job(VBR1): WAgt03, WAgt04            — same agent conn error
+  Prod_File_Job (VBR3): NAS-SRV01                — access denied
 """
 
 import psycopg2
@@ -73,8 +77,30 @@ FILES = ["NAS-SRV01", "NFS-SRV01"]  # 2 total
 
 ALL_OBJECTS = VMS + AGENTS + FILES   # 40 total
 
-# Exactly 4 bad objects: 2 VM, 1 Agent, 1 File
-BAD_OBJECTS = ["WApp03", "LApp02", "WAgt03", "NAS-SRV01"]
+# Per-job failures: multiple objects share the same root-cause error
+JOB_FAILURES = {
+    "Prod_VM_Job": {
+        "objects": ["WApp03", "WApp04", "WApp05"],
+        "error":   "CBT data is invalid, failing over to legacy incremental backup. Please reset CBT on the VM.",
+    },
+    "Linux_VM_Job": {
+        "objects": ["LApp02", "LApp03"],
+        "error":   "VSS error: VSS_E_SNAPSHOT_SET_IN_PROGRESS. Code: 0x80042316. Another snapshot operation is in progress.",
+    },
+    "Prod_Agent_Job": {
+        "objects": ["WAgt03", "WAgt04"],
+        "error":   "Failed to establish connection: the Veeam Agent service is unavailable on the target machine.",
+    },
+    "Prod_File_Job": {
+        "objects": ["NAS-SRV01"],
+        "error":   "Access is denied. Your organization's security policies block unauthenticated guest access to this shared folder.",
+    },
+}
+
+# Flat lists derived from JOB_FAILURES
+BAD_OBJECTS   = [o for f in JOB_FAILURES.values() for o in f["objects"]]
+BAD_OBJ_ERROR = {o: f["error"] for f in JOB_FAILURES.values() for o in f["objects"]}
+JOB_ERR_MSG   = {jname: f["error"] for jname, f in JOB_FAILURES.items()}
 
 # ── Job definitions ────────────────────────────────────────────────────────────
 WIN_VMS   = [v for v in VMS if v.startswith(("WApp","WWeb","WSQL","WDB"))]
@@ -312,7 +338,7 @@ def insert_job_sessions(cur):
             has_bad = any(o in BAD_OBJECTS for o in objs)
             if has_bad and random.random() < 0.6:
                 status   = random.choice(["Failed", "Warning"])
-                fail_msg = fail_msg_for(next(o for o in objs if o in BAD_OBJECTS))
+                fail_msg = JOB_ERR_MSG.get(jname, fail_msg_for(next(o for o in objs if o in BAD_OBJECTS)))
                 dur     *= random.uniform(0.4, 0.8)
             elif random.random() < 0.04:
                 status, fail_msg = "Warning", "Job completed with warnings."
@@ -348,7 +374,7 @@ def insert_failed_jobs_daily(cur):
                     """INSERT INTO failed_jobs_daily
                        (backup_date, vbr_server, job_name, failed_object_name, failure_message)
                        VALUES (%s,%s,%s,%s,%s)""",
-                    (run_date, vbr, jname, obj, fail_msg_for(obj)),
+                    (run_date, vbr, jname, obj, BAD_OBJ_ERROR[obj]),
                 )
                 count += 1
         # Occasional random failure from a healthy object
@@ -431,7 +457,9 @@ def main():
     print(f"Jobs        : Prod_VM_Job (VBR1), Linux_VM_Job (VBR2),")
     print(f"              Prod_Agent_Job (VBR1), Linux_Agent_Job (VBR2), Prod_File_Job (VBR3)")
     print(f"Objects     : 30 VM + 8 Agent + 2 File = 40 total")
-    print(f"Bad objects : {BAD_OBJECTS}")
+    print(f"Bad objects : {len(BAD_OBJECTS)} total — {BAD_OBJECTS}")
+    for jname, f in JOB_FAILURES.items():
+        print(f"  {jname}: {f['objects']} — same error")
 
     conn = get_conn()
     cur  = conn.cursor()
