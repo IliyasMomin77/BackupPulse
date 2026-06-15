@@ -832,7 +832,7 @@ def list_incidents_route():
             headers={"Accept": "application/json"},
             params={
                 "sysparm_fields":  "number,short_description,description,state,urgency,opened_at,caller_id",
-                "sysparm_query":   f"caller_id.user_name={SNOW_USER}",
+                "sysparm_query":   f"caller_id.user_name={SNOW_USER}^state!=6^state!=7",
                 "sysparm_limit":   20,
                 "sysparm_orderby": "opened_at^DESC",
             },

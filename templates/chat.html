@@ -133,7 +133,7 @@ textarea::placeholder{color:var(--muted)}
       <div class="snow-dd-menu" id="snow-dd-menu">
         <div class="snow-dd-item" onclick="closeSnowMenu();openCreateIM()">&#x2795; Create Incident</div>
         <div class="snow-dd-item" onclick="closeSnowMenu();openResolveIM('')">&#x2705; Resolve Incident</div>
-        <div class="snow-dd-item" onclick="closeSnowMenu();listIMs()">&#x1F4CB; List Incidents</div>
+        <div class="snow-dd-item" onclick="closeSnowMenu();listIMs()">&#x1F513; List Open IM</div>
       </div>
     </div>
   </div>
@@ -341,7 +341,7 @@ async function listIMs(){
     const d=await r.json();
     tr.remove();
     if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
-    else if(!d.incidents||d.incidents.length===0){addMsg('bot','No incidents found in ServiceNow.');}
+    else if(!d.incidents||d.incidents.length===0){addMsg('bot','No open incidents found in ServiceNow.');}
     else{
       const STATE_COLOR={'New':'warn','In Progress':'warn','On Hold':'muted','Resolved':'ok','Closed':'ok'};
       let html=`<b>${d.incidents.length} Incident(s) in ServiceNow:</b><br><br>`;
