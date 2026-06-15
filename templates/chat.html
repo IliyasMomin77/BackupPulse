@@ -76,10 +76,16 @@ textarea::placeholder{color:var(--muted)}
 .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:7px}
 
 /* ServiceNow Modals */
-.snow-modal{display:none;position:fixed;inset:0;z-index:1100;padding:16px;overflow-y:auto;pointer-events:none}
-.snow-card{max-width:500px;margin:60px auto;background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.6);overflow:hidden;pointer-events:all}
-.snow-hdr{padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
-.snow-hdr-title{font-size:14px;font-weight:600}
+.snow-modal{display:none;position:fixed;inset:0;z-index:1100;pointer-events:none}
+.snow-card{position:fixed;top:65px;right:20px;width:460px;background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.7);overflow:hidden;pointer-events:all}
+.snow-hdr{padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);cursor:grab;user-select:none}
+.snow-hdr:active{cursor:grabbing}
+.snow-hdr-title{font-size:13px;font-weight:600;flex:1}
+.snow-hdr-btns{display:flex;gap:4px;align-items:center}
+.snow-min-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;font-weight:700;line-height:1;padding:2px 7px;border-radius:4px;pointer-events:all}
+.snow-min-btn:hover{color:var(--text);background:var(--border)}
+.snow-card.minimized .snow-body,.snow-card.minimized .snow-footer,.snow-card.minimized .snow-status{display:none!important}
+.snow-card.minimized{border-radius:10px}
 .snow-body{padding:18px;display:flex;flex-direction:column;gap:14px}
 .snow-field label{font-size:11px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500}
 .snow-field input,.snow-field select,.snow-field textarea{width:100%;background:var(--bg);border:1.5px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;font-family:inherit;outline:none;transition:border-color .2s}
@@ -181,10 +187,13 @@ textarea::placeholder{color:var(--muted)}
 
 <!-- Create IM Modal -->
 <div class="snow-modal" id="snow-create-modal">
-  <div class="snow-card">
+  <div class="snow-card" id="snow-create-card">
     <div class="snow-hdr">
       <span class="snow-hdr-title">&#x1F3AB; Create ServiceNow Incident</span>
-      <button class="close-btn" onclick="closeCreateIM()">&#x2715;</button>
+      <div class="snow-hdr-btns">
+        <button class="snow-min-btn" onclick="toggleSnowMin('snow-create-card')" title="Minimize">&#x2212;</button>
+        <button class="close-btn" onclick="closeCreateIM()">&#x2715;</button>
+      </div>
     </div>
     <div class="snow-body">
       <div class="snow-field">
@@ -218,10 +227,13 @@ textarea::placeholder{color:var(--muted)}
 
 <!-- Resolve IM Modal -->
 <div class="snow-modal" id="snow-resolve-modal">
-  <div class="snow-card">
+  <div class="snow-card" id="snow-resolve-card">
     <div class="snow-hdr">
       <span class="snow-hdr-title">&#x2705; Resolve ServiceNow Incident</span>
-      <button class="close-btn" onclick="closeResolveIM()">&#x2715;</button>
+      <div class="snow-hdr-btns">
+        <button class="snow-min-btn" onclick="toggleSnowMin('snow-resolve-card')" title="Minimize">&#x2212;</button>
+        <button class="close-btn" onclick="closeResolveIM()">&#x2715;</button>
+      </div>
     </div>
     <div class="snow-body">
       <div class="snow-field">
@@ -253,10 +265,13 @@ textarea::placeholder{color:var(--muted)}
 
 <!-- Search IM Modal -->
 <div class="snow-modal" id="snow-search-modal">
-  <div class="snow-card">
+  <div class="snow-card" id="snow-search-card">
     <div class="snow-hdr">
       <span class="snow-hdr-title">&#x1F50D; Search ServiceNow Incident</span>
-      <button class="close-btn" onclick="closeSearchIM()">&#x2715;</button>
+      <div class="snow-hdr-btns">
+        <button class="snow-min-btn" onclick="toggleSnowMin('snow-search-card')" title="Minimize">&#x2212;</button>
+        <button class="close-btn" onclick="closeSearchIM()">&#x2715;</button>
+      </div>
     </div>
     <div class="snow-body">
       <div class="snow-field">
@@ -380,7 +395,44 @@ async function listIMs(){
   }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
 }
 
+function toggleSnowMin(cardId){
+  const card=document.getElementById(cardId);
+  const btn=card.querySelector('.snow-min-btn');
+  card.classList.toggle('minimized');
+  btn.innerHTML=card.classList.contains('minimized')?'&#x25A1;':'&#x2212;';
+}
+
+// Drag — attach once for all .snow-card elements
+(function(){
+  let dc=null,ox=0,oy=0;
+  document.querySelectorAll('.snow-card').forEach(function(card){
+    card.querySelector('.snow-hdr').addEventListener('mousedown',function(e){
+      if(e.target.closest('button'))return;
+      const r=card.getBoundingClientRect();
+      card.style.right='auto';
+      card.style.left=r.left+'px';
+      card.style.top=r.top+'px';
+      dc=card;ox=e.clientX-r.left;oy=e.clientY-r.top;
+      e.preventDefault();
+    });
+  });
+  document.addEventListener('mousemove',function(e){
+    if(!dc)return;
+    dc.style.left=(e.clientX-ox)+'px';
+    dc.style.top=Math.max(0,e.clientY-oy)+'px';
+  });
+  document.addEventListener('mouseup',function(){dc=null;});
+})();
+
+function _resetCard(cardId){
+  const card=document.getElementById(cardId);
+  card.style.left='';card.style.top='';card.style.right='';
+  card.classList.remove('minimized');
+  card.querySelector('.snow-min-btn').innerHTML='&#x2212;';
+}
+
 function openSearchIM(){
+  _resetCard('snow-search-card');
   document.getElementById('si-inc').value='';
   document.getElementById('si-status').style.display='none';
   document.getElementById('si-submit').disabled=false;
@@ -615,6 +667,7 @@ function closeModal(){
 }
 
 function openCreateIM(){
+  _resetCard('snow-create-card');
   document.getElementById('ci-short').value='';
   document.getElementById('ci-desc').value='';
   document.getElementById('ci-object').value='';
@@ -627,6 +680,7 @@ function openCreateIM(){
 function closeCreateIM(){document.getElementById('snow-create-modal').style.display='none';}
 
 function openResolveIM(incNumber){
+  _resetCard('snow-resolve-card');
   document.getElementById('ri-inc').value=incNumber||'';
   document.getElementById('ri-notes').value='';
   document.getElementById('ri-code').value='Solved (Permanently)';
