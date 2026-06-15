@@ -108,7 +108,7 @@ COPILOT_API_KEY = os.getenv("COPILOT_API_KEY", "")
 COPILOT_MODEL   = os.getenv("COPILOT_MODEL", "gpt-4o")
 COPILOT_URL     = os.getenv("COPILOT_URL", "https://api.githubcopilot.com/chat/completions")
 
-OLLAMA_URL      = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_URL      = os.getenv("OLLAMA_URL", "http://localhost:11434/v1/chat/completions")
 OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "phi3.5")
 
 # Known selectable models per provider (shown in the UI dropdown)
@@ -266,9 +266,7 @@ def call_llm(prompt, system=None, max_tokens=500):
     elif MODEL_PROVIDER == "lmstudio":
         return call_openai_compatible(prompt, system, LMSTUDIO_URL, "lm-studio", LMSTUDIO_MODEL, max_tokens)
     elif MODEL_PROVIDER == "ollama":
-        full = (system + "\n\n" + prompt) if system else prompt
-        r = requests.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": full, "stream": False}, timeout=120)
-        return r.json()["response"].strip()
+        return call_openai_compatible(prompt, system, OLLAMA_URL, "", OLLAMA_MODEL, max_tokens)
     return "No valid provider configured."
 
 
