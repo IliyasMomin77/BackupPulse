@@ -23,6 +23,13 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .health-btn{padding:7px 14px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:12px;cursor:pointer;transition:all .18s;white-space:nowrap}
 .health-btn:hover{border-color:#16A34A;color:#4ade80}
+.snow-dd-wrap{position:relative}
+.snow-dd-btn{padding:7px 14px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:12px;cursor:pointer;transition:all .18s;white-space:nowrap}
+.snow-dd-btn:hover,.snow-dd-btn.open{border-color:#7c3aed;color:#a78bfa}
+.snow-dd-menu{display:none;position:absolute;top:calc(100% + 6px);right:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.4);min-width:170px;z-index:200;overflow:hidden}
+.snow-dd-menu.open{display:block}
+.snow-dd-item{padding:10px 16px;font-size:12px;cursor:pointer;color:var(--text);transition:background .15s;white-space:nowrap}
+.snow-dd-item:hover{background:var(--surface2)}
 .model-select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;outline:none;transition:border-color .2s}
 .model-select:focus,.model-select:hover{border-color:var(--accent)}
 .model-label{font-size:11px;color:var(--muted);white-space:nowrap}
@@ -121,6 +128,14 @@ textarea::placeholder{color:var(--muted)}
     </select>
     <span class="pulse"></span>
     <button class="health-btn" onclick="healthReport()">&#x1F4CA; Health Report</button>
+    <div class="snow-dd-wrap">
+      <button class="snow-dd-btn" id="snow-dd-btn" onclick="toggleSnowMenu()">&#x1F3AB; SNOW &#x25BE;</button>
+      <div class="snow-dd-menu" id="snow-dd-menu">
+        <div class="snow-dd-item" onclick="closeSnowMenu();openCreateIM()">&#x2795; Create Incident</div>
+        <div class="snow-dd-item" onclick="closeSnowMenu();openResolveIM('')">&#x2705; Resolve Incident</div>
+        <div class="snow-dd-item" onclick="closeSnowMenu();listIMs()">&#x1F4CB; List Incidents</div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -137,8 +152,6 @@ textarea::placeholder{color:var(--muted)}
   <span class="chip" onclick="ask(this)">&#x1F4BE; VMs missing backups</span>
   <span class="chip" onclick="ask(this)">&#x23F1;&#xFE0F; Long running jobs</span>
   <span class="chip" onclick="healthReport()">&#x1F4CA; Health Report</span>
-  <span class="chip" onclick="openCreateIM()">&#x1F3AB; Create IM</span>
-  <span class="chip" onclick="openResolveIM('')">&#x2705; Resolve IM</span>
 </div>
 
 <div class="bar">
@@ -307,8 +320,42 @@ function addTyping(){
   return row;
 }
 
-const SNOW_LIST_RE=/\b(list|show|get|fetch|display)\b.{0,20}\b(im|incident|ticket)s?\b|\b(im|incident|ticket)s?\b.{0,20}\b(list|raised|open|created)\b/i;
-function isSnowListRequest(q){return SNOW_LIST_RE.test(q);}
+function toggleSnowMenu(){
+  const btn=document.getElementById('snow-dd-btn');
+  const menu=document.getElementById('snow-dd-menu');
+  const open=menu.classList.toggle('open');
+  btn.classList.toggle('open',open);
+}
+function closeSnowMenu(){
+  document.getElementById('snow-dd-menu').classList.remove('open');
+  document.getElementById('snow-dd-btn').classList.remove('open');
+}
+document.addEventListener('click',function(e){
+  if(!e.target.closest('.snow-dd-wrap')) closeSnowMenu();
+});
+
+async function listIMs(){
+  const tr=addTyping();
+  try{
+    const r=await fetch('/list-incidents');
+    const d=await r.json();
+    tr.remove();
+    if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
+    else if(!d.incidents||d.incidents.length===0){addMsg('bot','No incidents found in ServiceNow.');}
+    else{
+      const STATE_COLOR={'New':'warn','In Progress':'warn','On Hold':'muted','Resolved':'ok','Closed':'ok'};
+      let html=`<b>${d.incidents.length} Incident(s) in ServiceNow:</b><br><br>`;
+      for(const i of d.incidents){
+        const sc=STATE_COLOR[i.state]||'muted';
+        html+=`<b>${esc(i.number)}</b> &mdash; ${esc(i.summary)}<br>`;
+        html+=`&nbsp;&nbsp;<span class="${sc}">${esc(i.state)}</span> &middot; ${esc(i.urgency)} &middot; ${esc(i.opened_at)}<br>`;
+        if(i.description){html+=`&nbsp;&nbsp;<span style="color:var(--muted);font-size:12px">${esc(i.description.substring(0,120))}${i.description.length>120?'...':''}</span><br>`;}
+        html+='<br>';
+      }
+      addMsg('bot',html);
+    }
+  }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
+}
 
 const HEALTH_TRIGGERS=[
   'health report','healthcheck','health check',
@@ -361,32 +408,6 @@ async function send(){
   if(!q||btn.disabled)return;
   addMsg('user',esc(q));
   ta.value='';ta.style.height='auto';
-
-  if(isSnowListRequest(q)){
-    btn.disabled=true;
-    const tr=addTyping();
-    try{
-      const r=await fetch('/list-incidents');
-      const d=await r.json();
-      tr.remove();
-      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
-      else if(!d.incidents||d.incidents.length===0){addMsg('bot','No incidents found in ServiceNow.');}
-      else{
-        const STATE_COLOR={'New':'warn','In Progress':'warn','On Hold':'muted','Resolved':'ok','Closed':'ok'};
-        let html=`<b>${d.incidents.length} Incident(s) in ServiceNow:</b><br><br>`;
-        for(const i of d.incidents){
-          const sc=STATE_COLOR[i.state]||'muted';
-          html+=`<b>${esc(i.number)}</b> &mdash; ${esc(i.summary)}<br>`;
-          html+=`&nbsp;&nbsp;<span class="${sc}">${esc(i.state)}</span> &middot; ${esc(i.urgency)} &middot; ${esc(i.opened_at)}<br>`;
-          if(i.description){html+=`&nbsp;&nbsp;<span style="color:var(--muted);font-size:12px">${esc(i.description.substring(0,120))}${i.description.length>120?'...':''}</span><br>`;}
-          html+='<br>';
-        }
-        addMsg('bot',html);
-      }
-    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
-    btn.disabled=false;ta.focus();
-    return;
-  }
 
   if(isHealthRequest(q)){
     addMsg('bot','Sure! Opening the backup health report now — review it and send when ready. &#x1F4CA;');
