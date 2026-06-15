@@ -307,6 +307,13 @@ function addTyping(){
   return row;
 }
 
+const SNOW_LIST_TRIGGERS=[
+  'list im','list incident','list ticket','show im','show incident','show ticket',
+  'get incident','all incident','my incident','raised im','raised incident',
+  'open incident','open im','incidents raised','tickets raised','what incident','which incident'
+];
+function isSnowListRequest(q){const l=q.toLowerCase();return SNOW_LIST_TRIGGERS.some(t=>l.includes(t));}
+
 const HEALTH_TRIGGERS=[
   'health report','healthcheck','health check',
   'backup report','backup health','backup status report',
@@ -358,6 +365,32 @@ async function send(){
   if(!q||btn.disabled)return;
   addMsg('user',esc(q));
   ta.value='';ta.style.height='auto';
+
+  if(isSnowListRequest(q)){
+    btn.disabled=true;
+    const tr=addTyping();
+    try{
+      const r=await fetch('/list-incidents');
+      const d=await r.json();
+      tr.remove();
+      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
+      else if(!d.incidents||d.incidents.length===0){addMsg('bot','No incidents found in ServiceNow.');}
+      else{
+        const STATE_COLOR={'New':'warn','In Progress':'warn','On Hold':'muted','Resolved':'ok','Closed':'ok'};
+        let html=`<b>${d.incidents.length} Incident(s) in ServiceNow:</b><br><br>`;
+        for(const i of d.incidents){
+          const sc=STATE_COLOR[i.state]||'muted';
+          html+=`<b>${esc(i.number)}</b> &mdash; ${esc(i.summary)}<br>`;
+          html+=`&nbsp;&nbsp;<span class="${sc}">${esc(i.state)}</span> &middot; ${esc(i.urgency)} &middot; ${esc(i.opened_at)}<br>`;
+          if(i.description){html+=`&nbsp;&nbsp;<span style="color:var(--muted);font-size:12px">${esc(i.description.substring(0,120))}${i.description.length>120?'...':''}</span><br>`;}
+          html+='<br>';
+        }
+        addMsg('bot',html);
+      }
+    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
+    btn.disabled=false;ta.focus();
+    return;
+  }
 
   if(isHealthRequest(q)){
     addMsg('bot','Sure! Opening the backup health report now — review it and send when ready. &#x1F4CA;');

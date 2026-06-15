@@ -760,6 +760,44 @@ def create_incident_route():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/list-incidents")
+def list_incidents_route():
+    from requests.auth import HTTPBasicAuth
+    if not SNOW_INSTANCE or not SNOW_USER:
+        return jsonify({"error": "ServiceNow not configured"}), 400
+    try:
+        r = requests.get(
+            f"{SNOW_INSTANCE}/api/now/table/incident",
+            auth=HTTPBasicAuth(SNOW_USER, SNOW_PASS),
+            headers={"Accept": "application/json"},
+            params={
+                "sysparm_fields":  "number,short_description,description,state,urgency,opened_at",
+                "sysparm_limit":   20,
+                "sysparm_orderby": "opened_at^DESC",
+            },
+            timeout=30
+        )
+        if not r.ok:
+            return jsonify({"error": f"SNOW error {r.status_code}"}), 500
+        STATE = {"1":"New","2":"In Progress","3":"On Hold","6":"Resolved","7":"Closed"}
+        URGENCY = {"1":"Critical","2":"High","3":"Medium","4":"Low"}
+        items = []
+        for rec in r.json().get("result", []):
+            items.append({
+                "number":      rec.get("number",""),
+                "summary":     rec.get("short_description",""),
+                "description": rec.get("description",""),
+                "state":       STATE.get(str(rec.get("state","")),"Unknown"),
+                "urgency":     URGENCY.get(str(rec.get("urgency","")),""),
+                "opened_at":   str(rec.get("opened_at",""))[:16],
+            })
+        log.info(f"[ROUTE /list-incidents] returned {len(items)} incidents")
+        return jsonify({"incidents": items})
+    except Exception as e:
+        log.error(f"[ROUTE /list-incidents] error={e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/resolve-incident", methods=["POST"])
 def resolve_incident_route():
     data = request.get_json()
