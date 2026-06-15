@@ -831,25 +831,25 @@ def list_incidents_route():
             auth=HTTPBasicAuth(SNOW_USER, SNOW_PASS),
             headers={"Accept": "application/json"},
             params={
-                "sysparm_fields":  "number,short_description,description,state,urgency,opened_at,caller_id",
-                "sysparm_query":   f"caller_id.user_name={SNOW_USER}^state!=6^state!=7",
-                "sysparm_limit":   20,
-                "sysparm_orderby": "opened_at^DESC",
+                "sysparm_fields":        "number,short_description,description,state,urgency,opened_at,assigned_to",
+                "sysparm_query":         f"caller_id.user_name={SNOW_USER}^state!=6^state!=7",
+                "sysparm_display_value": "true",
+                "sysparm_limit":         20,
+                "sysparm_orderby":       "opened_at^DESC",
             },
             timeout=30
         )
         if not r.ok:
             return jsonify({"error": f"SNOW error {r.status_code}"}), 500
-        STATE = {"1":"New","2":"In Progress","3":"On Hold","6":"Resolved","7":"Closed"}
-        URGENCY = {"1":"Critical","2":"High","3":"Medium","4":"Low"}
         items = []
         for rec in r.json().get("result", []):
             items.append({
                 "number":      rec.get("number",""),
                 "summary":     rec.get("short_description",""),
                 "description": rec.get("description",""),
-                "state":       STATE.get(str(rec.get("state","")),"Unknown"),
-                "urgency":     URGENCY.get(str(rec.get("urgency","")),""),
+                "state":       rec.get("state",""),
+                "urgency":     rec.get("urgency",""),
+                "assigned_to": rec.get("assigned_to") or "Unassigned",
                 "opened_at":   str(rec.get("opened_at",""))[:16],
             })
         log.info(f"[ROUTE /list-incidents] returned {len(items)} incidents")

@@ -76,8 +76,8 @@ textarea::placeholder{color:var(--muted)}
 .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:7px}
 
 /* ServiceNow Modals */
-.snow-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:1100;padding:16px;overflow-y:auto}
-.snow-card{max-width:500px;margin:60px auto;background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.6);overflow:hidden}
+.snow-modal{display:none;position:fixed;inset:0;z-index:1100;padding:16px;overflow-y:auto;pointer-events:none}
+.snow-card{max-width:500px;margin:60px auto;background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.6);overflow:hidden;pointer-events:all}
 .snow-hdr{padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
 .snow-hdr-title{font-size:14px;font-weight:600}
 .snow-body{padding:18px;display:flex;flex-direction:column;gap:14px}
@@ -366,11 +366,12 @@ async function listIMs(){
     else if(!d.incidents||d.incidents.length===0){addMsg('bot','No open incidents found in ServiceNow.');}
     else{
       const STATE_COLOR={'New':'warn','In Progress':'warn','On Hold':'muted','Resolved':'ok','Closed':'ok'};
-      let html=`<b>${d.incidents.length} Incident(s) in ServiceNow:</b><br><br>`;
+      let html=`<b>${d.incidents.length} Open Incident(s) in ServiceNow:</b><br><br>`;
       for(const i of d.incidents){
         const sc=STATE_COLOR[i.state]||'muted';
         html+=`<b>${esc(i.number)}</b> &mdash; ${esc(i.summary)}<br>`;
-        html+=`&nbsp;&nbsp;<span class="${sc}">${esc(i.state)}</span> &middot; ${esc(i.urgency)} &middot; ${esc(i.opened_at)}<br>`;
+        html+=`&nbsp;&nbsp;<span class="${sc}">${esc(i.state)}</span> &middot; ${esc(i.urgency)} &middot; Opened: ${esc(i.opened_at)}<br>`;
+        html+=`&nbsp;&nbsp;&#x1F464; <b>Assigned:</b> ${esc(i.assigned_to)}<br>`;
         if(i.description){html+=`&nbsp;&nbsp;<span style="color:var(--muted);font-size:12px">${esc(i.description.substring(0,120))}${i.description.length>120?'...':''}</span><br>`;}
         html+='<br>';
       }
