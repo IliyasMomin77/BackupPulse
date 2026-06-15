@@ -527,14 +527,14 @@ def resolve_snow_incident(inc_number, resolution_code, resolution_notes):
         f"{SNOW_INSTANCE}/api/now/table/incident",
         auth=auth,
         headers={"Accept": "application/json"},
-        params={"sysparm_query": f"number={inc_number}", "sysparm_fields": "sys_id,number,short_description"},
+        params={"sysparm_query": f"number={inc_number}", "sysparm_fields": "sys_id,number,short_description,description"},
         timeout=30
     )
     results = r.json().get("result", [])
     if not results:
         raise Exception(f"Incident {inc_number} not found in ServiceNow")
     sys_id      = results[0]["sys_id"]
-    description = results[0].get("short_description", "")
+    description = results[0].get("description") or results[0].get("short_description", "")
     log.info(f"[SNOW] resolving {inc_number} sys_id={sys_id} code={resolution_code!r}")
     r = requests.patch(
         f"{SNOW_INSTANCE}/api/now/table/incident/{sys_id}",
