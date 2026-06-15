@@ -108,6 +108,16 @@ COPILOT_API_KEY = os.getenv("COPILOT_API_KEY", "")
 COPILOT_MODEL   = os.getenv("COPILOT_MODEL", "gpt-4o")
 COPILOT_URL     = os.getenv("COPILOT_URL", "https://api.githubcopilot.com/chat/completions")
 
+SNOW_INSTANCE         = os.getenv("SNOW_INSTANCE", "")
+SNOW_USER             = os.getenv("SNOW_USER", "")
+SNOW_PASS             = os.getenv("SNOW_PASS", "")
+SNOW_ASSIGNMENT_GROUP = os.getenv("SNOW_ASSIGNMENT_GROUP", "")
+
+SNOW_INSTANCE        = os.getenv("SNOW_INSTANCE", "")
+SNOW_USER            = os.getenv("SNOW_USER", "")
+SNOW_PASS            = os.getenv("SNOW_PASS", "")
+SNOW_ASSIGNMENT_GROUP = os.getenv("SNOW_ASSIGNMENT_GROUP", "")
+
 OLLAMA_URL      = os.getenv("OLLAMA_URL", "http://localhost:11434/v1/chat/completions")
 OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "phi3.5")
 
@@ -415,6 +425,46 @@ def _log_qa(question, answer, duration, provider):
         log.warning(f"[QA LOG] write failed: {exc}")
 
 
+_SNOW_TRIGGER = re.compile(
+    r'\b(create|raise|open|log|file)\s+(im|incident|ticket|inc)\b',
+    re.IGNORECASE
+)
+
+
+def create_snow_incident(short_description, description, urgency=2, impact=2):
+    from requests.auth import HTTPBasicAuth
+    if not SNOW_INSTANCE or not SNOW_USER:
+        raise Exception("ServiceNow not configured. Add SNOW_INSTANCE, SNOW_USER, SNOW_PASS to config_final.env")
+    url = f"{SNOW_INSTANCE}/api/now/table/incident"
+    payload = {
+        "short_description": short_description,
+        "description":       description,
+        "urgency":           str(urgency),
+        "impact":            str(impact),
+        "category":          "infrastructure",
+        "subcategory":       "backup",
+        "caller_id":         SNOW_USER,
+    }
+    if SNOW_ASSIGNMENT_GROUP:
+        payload["assignment_group"] = SNOW_ASSIGNMENT_GROUP
+    log.info(f"[SNOW] creating incident short_desc={short_description!r} urgency={urgency}")
+    r = requests.post(
+        url,
+        auth=HTTPBasicAuth(SNOW_USER, SNOW_PASS),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        json=payload,
+        timeout=30
+    )
+    if not r.ok:
+        log.error(f"[SNOW] FAILED status={r.status_code} error={r.text[:200]}")
+        raise Exception(f"ServiceNow error {r.status_code}: {r.text[:200]}")
+    result = r.json()["result"]
+    inc_number = result["number"]
+    inc_url    = f"{SNOW_INSTANCE}/nav_to.do?uri=incident.do?sysparm_query=number={inc_number}"
+    log.info(f"[SNOW] created {inc_number}")
+    return inc_number, inc_url
+
+
 def process_question(question):
     t0 = time.perf_counter()
     log.info(f"[CHAT] question={question!r}")
@@ -424,6 +474,37 @@ def process_question(question):
     if _INSTANT_REPLY.match(question):
         reply = "Hey! Ask me anything about your backup environment — failed jobs, restore points, repository capacity, or generate a health report."
         log.info(f"[CHAT] instant greeting — {round(time.perf_counter()-t0,3)}s")
+
+    elif _SNOW_TRIGGER.search(question):
+        try:
+            extract_prompt = (
+                f'The engineer wants to create a ServiceNow incident. Their message:\n"{question}"\n\n'
+                'Extract the following fields:\n'
+                '- short_description: one-line summary, max 100 chars\n'
+                '- description: full details of the issue\n'
+                '- urgency: integer 1=Critical 2=High 3=Medium (default 2)\n\n'
+                'Return JSON only, no explanation:\n'
+                '{"short_description": "...", "description": "...", "urgency": 2}'
+            )
+            raw = call_llm(extract_prompt, "Extract incident fields. Return JSON only.", max_tokens=200)
+            m = re.search(r'\{.*?\}', raw, re.DOTALL)
+            inc_data = json.loads(m.group()) if m else {}
+            short_desc = inc_data.get("short_description") or question[:100]
+            description = inc_data.get("description") or question
+            urgency     = int(inc_data.get("urgency", 2))
+            urgency_label = {1: "Critical", 2: "High", 3: "Medium"}.get(urgency, "High")
+
+            inc_number, inc_url = create_snow_incident(short_desc, description, urgency=urgency)
+            reply = (
+                f"✅ Incident **{inc_number}** raised in ServiceNow\n\n"
+                f"**Summary:** {short_desc}\n"
+                f"**Priority:** {urgency_label}\n"
+                f"**View:** {inc_url}"
+            )
+            log.info(f"[CHAT] SNOW incident created {inc_number} — {round(time.perf_counter()-t0,3)}s")
+        except Exception as e:
+            log.error(f"[CHAT] SNOW create failed: {e}")
+            reply = f"Failed to create ServiceNow incident: {e}"
 
     else:
         # Build SQL via LLM
