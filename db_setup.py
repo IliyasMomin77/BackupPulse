@@ -98,26 +98,35 @@ for (jname, objs, btype, vbr, dur, sz) in JOB_DEFS:
 
 # ── Failure messages ───────────────────────────────────────────────────────────
 VM_FAIL_MSGS = [
-    "Virtual Machine is unavailable. Check VMware connectivity.",
-    "Unable to connect to guest OS. VMware Tools not running.",
-    "Storage snapshot creation failed.",
-    "CBT reset required — incremental chain broken.",
-    "Quiesce operation failed — application-consistent backup skipped.",
-    "Network connection to backup proxy lost.",
-    "Disk read error on datastore.",
+    "Failed to create VSS snapshot: provider error 0x800423f4. A VSS critical writer has failed.",
+    "VSS error: VSS_E_SNAPSHOT_SET_IN_PROGRESS. Code: 0x80042316. Another snapshot operation is in progress.",
+    "CBT data is invalid, failing over to legacy incremental backup. Please reset CBT on the VM.",
+    "CreateSnapshot failed: timeout 1800000 ms exceeded. Storage may be under heavy load.",
+    "NFC storage connection is unavailable. Check network path between proxy and ESXi host.",
+    "SetVmChangeTracking failed: NoPermissionFault. Check vCenter service account permissions.",
+    "Failed to create NFC download stream. Verify ESXi host is reachable on port 902.",
+    "VM is unavailable and will be skipped from processing. Host may be in maintenance mode.",
+    "The object has been deleted or is no longer accessible in vCenter inventory.",
+    "Failed to finalize guest processing. VMware Tools may not be running or responding.",
 ]
 AGENT_FAIL_MSGS = [
-    "Agent connection timeout. Host unreachable.",
-    "Veeam Agent service not running on target machine.",
-    "Insufficient disk space on agent host.",
-    "Agent credentials rejected. Check service account.",
-    "VSS error during agent backup — retry required.",
+    "Failed to connect to the guest agent. Cannot connect to admin share. Win32 error: The network name cannot be found. Code: 67.",
+    "VSS_WS_FAILED_AT_POST_SNAPSHOT. Application-consistent backup could not be completed.",
+    "There is not enough space on the disk. Failed to write data to the backup file.",
+    "Failed to establish connection: the Veeam Agent service is unavailable on the target machine.",
+    "Failed to prepare guest for SQL Server transaction log backup: target machine actively refused connection.",
+    "Unable to perform application-aware processing: cannot establish connection to the guest OS.",
+    "I/O device error: failed to write data to backup file. Check disk health on agent host.",
+    "Failed to compact full backup file. Agent: Failed to process method {BackupAgent.Compact}.",
 ]
 FILE_FAIL_MSGS = [
-    "File share unavailable. Network path not found.",
-    "Access denied to backup source path.",
-    "File lock timeout — files in use by another process.",
-    "Insufficient repository space for file backup.",
+    "Access is denied. Your organization's security policies block unauthenticated guest access to this shared folder.",
+    "Failed to process NAS backup task: Error: Agent: Failed to process method {NasMaster.SaveSourceBackupMeta}.",
+    "Item is locked by running session [File Backup]. Retry after current session completes.",
+    "SMB 3.0 required. Share is not accessible using the current SMB protocol version.",
+    "Container does not exist or is no longer accessible. Verify the NAS share path and credentials.",
+    "Backing up 0 files and 0 folders (0 B transferred). File share may be empty or path is incorrect.",
+    "Failed to write data to the file. NAS destination repository may have insufficient space.",
 ]
 
 def fail_msg_for(obj):
