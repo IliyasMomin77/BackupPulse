@@ -134,6 +134,7 @@ textarea::placeholder{color:var(--muted)}
         <div class="snow-dd-item" onclick="closeSnowMenu();openCreateIM()">&#x2795; Create Incident</div>
         <div class="snow-dd-item" onclick="closeSnowMenu();openResolveIM('')">&#x2705; Resolve Incident</div>
         <div class="snow-dd-item" onclick="closeSnowMenu();listIMs()">&#x1F513; List Open IM</div>
+        <div class="snow-dd-item" onclick="closeSnowMenu();openSearchIM()">&#x1F50D; Search IM</div>
       </div>
     </div>
   </div>
@@ -250,6 +251,27 @@ textarea::placeholder{color:var(--muted)}
   </div>
 </div>
 
+<!-- Search IM Modal -->
+<div class="snow-modal" id="snow-search-modal">
+  <div class="snow-card">
+    <div class="snow-hdr">
+      <span class="snow-hdr-title">&#x1F50D; Search ServiceNow Incident</span>
+      <button class="close-btn" onclick="closeSearchIM()">&#x2715;</button>
+    </div>
+    <div class="snow-body">
+      <div class="snow-field">
+        <label>Incident Number *</label>
+        <input id="si-inc" type="text" placeholder="INC0010001" onkeydown="if(event.key==='Enter')submitSearchIM()">
+      </div>
+    </div>
+    <div id="si-status" class="snow-status"></div>
+    <div class="snow-footer">
+      <button class="close-btn" onclick="closeSearchIM()">Cancel</button>
+      <button class="snow-btn-submit" id="si-submit" onclick="submitSearchIM()">&#x1F50D; Search</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const ta=document.getElementById('q'),msgs=document.getElementById('msgs'),btn=document.getElementById('btn');
 let _healthHtml='';
@@ -355,6 +377,52 @@ async function listIMs(){
       addMsg('bot',html);
     }
   }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
+}
+
+function openSearchIM(){
+  document.getElementById('si-inc').value='';
+  document.getElementById('si-status').style.display='none';
+  document.getElementById('si-submit').disabled=false;
+  document.getElementById('si-submit').textContent='🔍 Search';
+  document.getElementById('snow-search-modal').style.display='block';
+  setTimeout(()=>document.getElementById('si-inc').focus(),100);
+}
+function closeSearchIM(){document.getElementById('snow-search-modal').style.display='none';}
+
+async function submitSearchIM(){
+  const inc=document.getElementById('si-inc').value.trim().toUpperCase();
+  if(!inc){_snowStatus('si-status','Incident number is required','#e74c3c');return;}
+  const submitBtn=document.getElementById('si-submit');
+  submitBtn.disabled=true;
+  submitBtn.textContent='Searching…';
+  _snowStatus('si-status','Looking up '+inc+' in ServiceNow…','#3498db');
+  try{
+    const r=await fetch('/get-incident?number='+encodeURIComponent(inc));
+    const d=await r.json();
+    if(d.error){
+      _snowStatus('si-status','⚠️ '+d.error,'#e74c3c');
+      submitBtn.disabled=false;submitBtn.textContent='🔍 Search';
+      return;
+    }
+    closeSearchIM();
+    const im=d.incident;
+    const resolved=im.state==='Resolved'||im.state==='Closed';
+    const inprog=im.state==='In Progress';
+    const sc=resolved?'ok':inprog?'warn':'warn';
+    let html=`<b style="font-size:14px">&#x1F3AB; ${esc(im.number)}</b> &nbsp;<span class="${sc}" style="padding:2px 8px;border-radius:10px;font-size:11px">${esc(im.state)}</span><br><br>`;
+    html+=`<b>Summary:</b> ${esc(im.summary)}<br>`;
+    html+=`<b>Priority:</b> ${esc(im.priority)} &nbsp;&middot;&nbsp; <b>Urgency:</b> ${esc(im.urgency)}<br>`;
+    html+=`<b>Assigned To:</b> ${esc(im.assigned_to)}<br>`;
+    html+=`<b>Group:</b> ${esc(im.assignment_group)}<br>`;
+    html+=`<b>Opened:</b> ${esc(im.opened_at)}`;
+    if(im.resolved_at) html+=` &nbsp;&middot;&nbsp; <b>Resolved:</b> ${esc(im.resolved_at)}`;
+    if(im.description) html+=`<br><br><b>Description:</b><br><span style="white-space:pre-wrap;color:var(--muted);font-size:12px">${esc(im.description)}</span>`;
+    if(im.close_notes) html+=`<br><br><b>Resolution Notes:</b><br><span style="white-space:pre-wrap;color:var(--muted);font-size:12px">${esc(im.close_notes)}</span>`;
+    addMsg('bot',html);
+  }catch(e){
+    _snowStatus('si-status','⚠️ Request failed','#e74c3c');
+    submitBtn.disabled=false;submitBtn.textContent='🔍 Search';
+  }
 }
 
 const HEALTH_TRIGGERS=[

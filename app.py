@@ -859,6 +859,52 @@ def list_incidents_route():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/get-incident")
+def get_incident_route():
+    from requests.auth import HTTPBasicAuth
+    if not SNOW_INSTANCE or not SNOW_USER:
+        return jsonify({"error": "ServiceNow not configured"}), 400
+    inc_number = request.args.get("number", "").strip().upper()
+    if not inc_number:
+        return jsonify({"error": "Incident number required"}), 400
+    try:
+        r = requests.get(
+            f"{SNOW_INSTANCE}/api/now/table/incident",
+            auth=HTTPBasicAuth(SNOW_USER, SNOW_PASS),
+            headers={"Accept": "application/json"},
+            params={
+                "sysparm_query":         f"number={inc_number}",
+                "sysparm_fields":        "number,short_description,description,state,urgency,priority,assigned_to,assignment_group,opened_at,resolved_at,close_notes,caller_id",
+                "sysparm_display_value": "true",
+                "sysparm_limit":         1,
+            },
+            timeout=30
+        )
+        if not r.ok:
+            return jsonify({"error": f"SNOW error {r.status_code}"}), 500
+        results = r.json().get("result", [])
+        if not results:
+            return jsonify({"error": f"{inc_number} not found in ServiceNow"}), 404
+        rec = results[0]
+        log.info(f"[ROUTE /get-incident] fetched {inc_number}")
+        return jsonify({"incident": {
+            "number":           rec.get("number", ""),
+            "summary":          rec.get("short_description", ""),
+            "description":      rec.get("description", ""),
+            "state":            rec.get("state", ""),
+            "urgency":          rec.get("urgency", ""),
+            "priority":         rec.get("priority", ""),
+            "assigned_to":      rec.get("assigned_to") or "Unassigned",
+            "assignment_group": rec.get("assignment_group") or "—",
+            "opened_at":        str(rec.get("opened_at", ""))[:16],
+            "resolved_at":      str(rec.get("resolved_at", ""))[:16],
+            "close_notes":      rec.get("close_notes", ""),
+        }})
+    except Exception as e:
+        log.error(f"[ROUTE /get-incident] error={e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/resolve-incident", methods=["POST"])
 def resolve_incident_route():
     data = request.get_json()
