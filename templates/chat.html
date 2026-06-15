@@ -554,20 +554,57 @@ async function openRemarksModal(){
     if(!d.jobs||d.jobs.length===0){document.getElementById('rm-empty').style.display='block';return;}
     const tbody=document.getElementById('rm-rows');
     tbody.innerHTML='';
+    // Group by job_key
+    const groups={};
+    const groupOrder=[];
     for(const j of d.jobs){
-      const tr=document.createElement('tr');
-      const inputId='rm-'+btoa(j.key).replace(/[^a-zA-Z0-9]/g,'').substring(0,20);
-      tr.innerHTML=`
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border)"><b>${esc(j.object)}</b></td>
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border);color:var(--muted)">${esc(j.job_name)}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border);color:var(--muted)">${esc(j.vbr_server)}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border);color:var(--muted);white-space:nowrap">${esc(j.backup_date)}</td>
-        <td style="padding:5px 10px;border-bottom:1px solid var(--border)">
-          <input id="${inputId}" data-key="${esc(j.key)}" type="text" value="${esc(j.remark)}"
-            placeholder="e.g. CBT reset done, monitoring..."
-            style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:12px;font-family:inherit;outline:none">
+      if(!groups[j.job_key]){groups[j.job_key]=[];groupOrder.push(j.job_key);}
+      groups[j.job_key].push(j);
+    }
+    const inp_style='width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:12px;font-family:inherit;outline:none';
+    const td_s='padding:6px 10px;border-bottom:1px solid var(--border)';
+    for(const jk of groupOrder){
+      const vms=groups[jk];
+      const first=vms[0];
+      const jobInputId='rmj-'+jk.replace(/[^a-zA-Z0-9]/g,'_');
+      const multiVM=vms.length>1;
+      // Job header row (always shown; if 1 VM acts as the single row)
+      const jobTr=document.createElement('tr');
+      jobTr.style.background='rgba(255,255,255,.04)';
+      const vmCount=multiVM?`<span style="color:var(--muted);font-size:11px"> (${vms.length} VMs)</span>`:'';
+      const fillHint=multiVM?`<span style="font-size:10px;color:var(--muted)"> — fills all VMs below if blank</span>`:'';
+      jobTr.innerHTML=`
+        <td colspan="3" style="${td_s}border-left:3px solid var(--accent)">
+          <b style="font-size:12px">&#x1F4BC; ${esc(first.job_name)}</b>${vmCount} &nbsp;<span style="color:var(--muted);font-size:11px">${esc(first.vbr_server)}</span>
+        </td>
+        <td style="${td_s}color:var(--muted);font-size:11px;white-space:nowrap">${esc(first.backup_date)}</td>
+        <td style="padding:4px 10px;border-bottom:1px solid var(--border)">
+          <input id="${jobInputId}" data-key="${esc(jk)}" type="text" value="${esc(first.job_remark)}"
+            placeholder="${multiVM?'Remark for all VMs in this job…':'e.g. CBT reset done, monitoring…'}"
+            style="${inp_style}"
+            ${multiVM?`oninput="document.querySelectorAll('[data-jobkey=\\'${jk}\\']').forEach(i=>{if(!i._touched)i.value=this.value})"`:''}>
+          ${fillHint}
         </td>`;
-      tbody.appendChild(tr);
+      tbody.appendChild(jobTr);
+      // Individual VM rows (only when multiple VMs)
+      if(multiVM){
+        for(const j of vms){
+          const vmTr=document.createElement('tr');
+          const vmInputId='rmv-'+j.key.replace(/[^a-zA-Z0-9]/g,'_');
+          vmTr.innerHTML=`
+            <td style="${td_s}padding-left:22px;color:var(--muted);font-size:12px" colspan="3">
+              &#x21B3; <b>${esc(j.object)}</b>
+            </td>
+            <td style="${td_s}"></td>
+            <td style="padding:4px 10px;border-bottom:1px solid var(--border)">
+              <input id="${vmInputId}" data-key="${esc(j.key)}" data-jobkey="${esc(jk)}" type="text" value="${esc(j.remark)}"
+                placeholder="Override (leave blank to use job remark)"
+                style="${inp_style};font-size:11px;color:var(--muted)"
+                oninput="this._touched=!!this.value">
+            </td>`;
+          tbody.appendChild(vmTr);
+        }
+      }
     }
     document.getElementById('rm-table').style.display='table';
   }catch(e){

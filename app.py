@@ -954,14 +954,17 @@ def failed_jobs_list():
         failed_24h, _, _ = _fetch_health_data()
         jobs = []
         for r in failed_24h[:60]:
-            key = f"{r['vbr_server']}|{r['job_name']}|{r['failed_object_name']}"
+            vm_key  = f"{r['vbr_server']}|{r['job_name']}|{r['failed_object_name']}"
+            job_key = f"JOB|{r['vbr_server']}|{r['job_name']}"
             jobs.append({
-                "key":         key,
+                "key":         vm_key,
+                "job_key":     job_key,
                 "backup_date": str(r.get("backup_date", "")),
                 "vbr_server":  r.get("vbr_server", ""),
                 "job_name":    r.get("job_name", ""),
                 "object":      r.get("failed_object_name", ""),
-                "remark":      _remarks.get(key, ""),
+                "remark":      _remarks.get(vm_key, ""),
+                "job_remark":  _remarks.get(job_key, ""),
             })
         return jsonify({"jobs": jobs})
     except Exception as e:

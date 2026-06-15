@@ -68,8 +68,9 @@
     <table>
       <tr><th>Date</th><th>VM / Object</th><th>Job Name</th><th>Server</th><th>Engineer Remark</th></tr>
       {% for r in failed_24h[:60] %}
-      {% set rkey = r.vbr_server + '|' + r.job_name + '|' + r.failed_object_name %}
-      {% set rm_val = (remarks.get(rkey, '')) if (remarks is mapping) else '' %}
+      {% set vm_key  = r.vbr_server + '|' + r.job_name + '|' + r.failed_object_name %}
+      {% set job_key = 'JOB|' + r.vbr_server + '|' + r.job_name %}
+      {% set rm_val  = (remarks.get(vm_key) or remarks.get(job_key, '')) if (remarks is mapping) else '' %}
       <tr>
         <td>{{ r.backup_date }}</td>
         <td><b>{{ r.failed_object_name }}</b></td>
