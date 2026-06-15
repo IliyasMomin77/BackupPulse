@@ -79,6 +79,48 @@ def _save_remarks(remarks):
 
 _remarks = []  # always start fresh; saved to file mid-session only
 
+# Incident resolution log — description + resolution only, used as LLM context
+_INCIDENTS_LOG = os.path.join(_log_dir, 'incidents.jsonl')
+
+def _log_incident_resolution(description: str, resolution: str):
+    try:
+        with open(_INCIDENTS_LOG, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                "description": description,
+                "resolution":  resolution,
+                "resolved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }, ensure_ascii=False) + '\n')
+        log.info(f"[INCIDENTS] resolution logged")
+    except Exception as exc:
+        log.warning(f"[INCIDENTS] write failed: {exc}")
+
+def _find_past_resolution(error_text: str) -> str | None:
+    """Scan incidents.jsonl for a past resolution matching the error. Returns suggestion string or None."""
+    if not error_text or not os.path.exists(_INCIDENTS_LOG):
+        return None
+    keywords = [w for w in error_text.lower().split() if len(w) > 4]
+    best, best_score = None, 0
+    try:
+        with open(_INCIDENTS_LOG, encoding='utf-8') as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                except Exception:
+                    continue
+                rec_desc = (rec.get('description') or '').lower()
+                score = sum(1 for kw in keywords if kw in rec_desc)
+                if score > best_score:
+                    best, best_score = rec, score
+    except Exception:
+        pass
+    if best and best_score >= 3:
+        return (f"[PAST RESOLUTION from incident log]\n"
+                f"Similar error seen before: {best['description']}\n"
+                f"How it was resolved: {best['resolution']}\n"
+                f"Resolved on: {best.get('resolved_at','')}\n"
+                f"Suggest this resolution if applicable.\n")
+    return None
+
 # ============================================================
 # CONFIG
 # ============================================================
@@ -485,13 +527,14 @@ def resolve_snow_incident(inc_number, resolution_code, resolution_notes):
         f"{SNOW_INSTANCE}/api/now/table/incident",
         auth=auth,
         headers={"Accept": "application/json"},
-        params={"sysparm_query": f"number={inc_number}", "sysparm_fields": "sys_id,number"},
+        params={"sysparm_query": f"number={inc_number}", "sysparm_fields": "sys_id,number,short_description"},
         timeout=30
     )
     results = r.json().get("result", [])
     if not results:
         raise Exception(f"Incident {inc_number} not found in ServiceNow")
-    sys_id = results[0]["sys_id"]
+    sys_id      = results[0]["sys_id"]
+    description = results[0].get("short_description", "")
     log.info(f"[SNOW] resolving {inc_number} sys_id={sys_id} code={resolution_code!r}")
     r = requests.patch(
         f"{SNOW_INSTANCE}/api/now/table/incident/{sys_id}",
@@ -509,7 +552,7 @@ def resolve_snow_incident(inc_number, resolution_code, resolution_notes):
         log.error(f"[SNOW] resolve FAILED status={r.status_code} error={r.text[:200]}")
         raise Exception(f"ServiceNow error {r.status_code}: {r.text[:200]}")
     log.info(f"[SNOW] resolved {inc_number}")
-    return inc_number
+    return inc_number, description
 
 
 def process_question(question):
@@ -605,9 +648,20 @@ def process_question(question):
                     log.info(f"[CHAT] local format done rows={len(rows)} — {round(time.perf_counter()-t0,3)}s")
 
                 else:
+                    # Check incident resolution log for past fixes on same error
+                    past_fix = ""
+                    for row in rows[:5]:
+                        err = row.get("failure_message") or row.get("failure_message", "")
+                        if err:
+                            match = _find_past_resolution(err)
+                            if match:
+                                past_fix = match
+                                break
+
                     explain_prompt = (
                         "[QUERY RESULTS]\n" + sql + "\n" + str(rows[:50])
                         + "\n\n[USER QUESTION]\n" + question
+                        + ("\n\n" + past_fix if past_fix else "")
                         + "\n\nReply in a helpful, conversational tone — like a knowledgeable colleague, "
                         "not a formal report. Lead with the key finding, use bullet points for lists, "
                         "bold the most important names and numbers with **text**, and suggest a clear "
@@ -817,7 +871,8 @@ def resolve_incident_route():
         return jsonify({"error": "Resolution notes are required"}), 400
     log.info(f"[ROUTE /resolve-incident] {inc_number} code={resolution_code!r}")
     try:
-        resolve_snow_incident(inc_number, resolution_code, resolution_notes)
+        inc_number, description = resolve_snow_incident(inc_number, resolution_code, resolution_notes)
+        _log_incident_resolution(description or inc_number, resolution_notes)
         return jsonify({"success": True, "message": f"✅ Incident **{inc_number}** resolved successfully in ServiceNow."})
     except Exception as e:
         log.error(f"[ROUTE /resolve-incident] error={e}")
