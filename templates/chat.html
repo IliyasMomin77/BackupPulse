@@ -23,8 +23,18 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .health-btn{padding:7px 14px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:12px;cursor:pointer;transition:all .18s;white-space:nowrap}
 .health-btn:hover{border-color:#16A34A;color:#4ade80}
+.snow-dd-wrap{position:relative}
+.snow-dd-btn{padding:7px 14px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:12px;cursor:pointer;transition:all .18s;white-space:nowrap}
+.snow-dd-btn:hover,.snow-dd-btn.open{border-color:#7c3aed;color:#a78bfa}
+.snow-dd-menu{display:none;position:absolute;top:calc(100% + 6px);right:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.4);min-width:170px;z-index:200;overflow:hidden}
+.snow-dd-menu.open{display:block}
+.snow-dd-item{padding:10px 16px;font-size:12px;cursor:pointer;color:var(--text);transition:background .15s;white-space:nowrap}
+.snow-dd-item:hover{background:var(--surface2)}
 .model-select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;outline:none;transition:border-color .2s}
 .model-select:focus,.model-select:hover{border-color:var(--accent)}
+.ping-btn{padding:5px 10px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:11px;cursor:pointer;transition:all .18s;white-space:nowrap;display:none}
+.ping-btn:hover{border-color:#38bdf8;color:#38bdf8}
+#ping-result{font-size:11px;white-space:nowrap;display:none}
 .model-label{font-size:11px;color:var(--muted);white-space:nowrap}
 
 .msgs{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px}
@@ -68,19 +78,52 @@ textarea::placeholder{color:var(--muted)}
 .send svg{width:15px;height:15px;fill:#fff}
 .hint{font-size:11px;color:var(--muted);text-align:center;margin-top:7px}
 
+/* ServiceNow Modals */
+.snow-modal{display:none;position:fixed;inset:0;z-index:1100;pointer-events:none}
+.snow-card{position:fixed;top:65px;right:20px;width:460px;background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.7);overflow:hidden;pointer-events:all}
+.snow-hdr{padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);cursor:grab;user-select:none}
+.snow-hdr:active{cursor:grabbing}
+.snow-hdr-title{font-size:13px;font-weight:600;flex:1}
+.snow-hdr-btns{display:flex;gap:4px;align-items:center}
+.snow-min-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;font-weight:700;line-height:1;padding:2px 7px;border-radius:4px;pointer-events:all}
+.snow-min-btn:hover{color:var(--text);background:var(--border)}
+.snow-card.minimized .snow-body,.snow-card.minimized .snow-footer,.snow-card.minimized .snow-status{display:none!important}
+.snow-card.minimized{border-radius:10px}
+.snow-body{padding:18px;display:flex;flex-direction:column;gap:14px}
+.snow-field label{font-size:11px;color:var(--muted);display:block;margin-bottom:5px;font-weight:500}
+.snow-field input,.snow-field select,.snow-field textarea{width:100%;background:var(--bg);border:1.5px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:13px;font-family:inherit;outline:none;transition:border-color .2s}
+.snow-field input:focus,.snow-field select:focus,.snow-field textarea:focus{border-color:var(--accent)}
+.snow-field textarea{resize:vertical;min-height:80px}
+.snow-field input.err,.snow-field textarea.err{border-color:var(--fail)}
+.snow-footer{padding:14px 18px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+.snow-btn-submit{padding:9px 20px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .2s}
+.snow-btn-submit:hover{background:#15803d}
+.snow-btn-submit:disabled{opacity:.5;cursor:not-allowed}
+.snow-status{padding:10px 18px;font-size:12px;display:none}
+
 /* Email Preview Modal */
-#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:1000;padding:16px;overflow-y:auto}
-.modal-card{max-width:780px;margin:0 auto;background:var(--surface);border-radius:14px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.6)}
-.modal-hdr{padding:14px 18px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);flex-wrap:wrap}
-.modal-title{font-size:14px;font-weight:600;flex-shrink:0}
-#email-to{flex:1;min-width:180px;padding:7px 12px;background:var(--bg);border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;transition:border-color .2s}
+#modal{display:none;position:fixed;inset:0;z-index:1000;pointer-events:none}
+.modal-card{position:fixed;top:55px;width:800px;max-width:calc(100vw - 40px);background:var(--surface);border-radius:14px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.7);pointer-events:all}
+.modal-hdr{padding:12px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);cursor:grab;user-select:none}
+.modal-hdr:active{cursor:grabbing}
+.modal-title{font-size:13px;font-weight:600;flex-shrink:0}
+#email-to{flex:1;min-width:140px;padding:6px 10px;background:var(--bg);border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;transition:border-color .2s;cursor:text}
 #email-to:focus{border-color:var(--accent)}
-.send-email-btn{padding:8px 16px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;font-weight:600;transition:background .2s;white-space:nowrap}
+.send-email-btn{padding:7px 14px;background:#16A34A;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;font-weight:600;transition:background .2s;white-space:nowrap}
 .send-email-btn:hover{background:#15803d}.send-email-btn:disabled{opacity:.5;cursor:not-allowed}
-.close-btn{padding:8px 12px;background:var(--surface2);border:none;border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer}
+.close-btn{padding:6px 12px;background:var(--surface2);border:none;border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer}
 .close-btn:hover{color:var(--text)}
 #modal-status{display:none;padding:10px 18px;font-size:13px}
-#email-frame{width:100%;height:72vh;border:none;display:block;background:#fff}
+#email-frame{width:100%;height:70vh;border:none;display:block;background:#fff}
+.modal-card.minimized #email-frame,.modal-card.minimized #modal-status{display:none!important}
+/* Remarks Modal */
+#remarks-modal{display:none;position:fixed;inset:0;z-index:1200;pointer-events:none}
+.rm-card{position:fixed;top:55px;width:740px;max-width:calc(100vw - 40px);background:var(--surface);border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.7);overflow:hidden;pointer-events:all}
+.rm-hdr{padding:13px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);cursor:grab;user-select:none}
+.rm-hdr:active{cursor:grabbing}
+.rm-body-wrap{padding:16px;max-height:60vh;overflow-y:auto}
+.rm-footer{padding:11px 16px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+.rm-card.minimized .rm-body-wrap,.rm-card.minimized .rm-footer,.rm-card.minimized #rm-status{display:none!important}
 </style>
 </head>
 <body>
@@ -102,8 +145,20 @@ textarea::placeholder{color:var(--muted)}
     <select id="model-select" class="model-select" onchange="switchModel(this.value)">
       <option value="{{ active_model }}">{{ active_model }}</option>
     </select>
+    <button id="ping-btn" class="ping-btn" onclick="pingProvider()" title="Test connection to local model server">&#x1F4E1; Test</button>
+    <span id="ping-result"></span>
     <span class="pulse"></span>
     <button class="health-btn" onclick="healthReport()">&#x1F4CA; Health Report</button>
+    <button class="health-btn" onclick="openRemarksModal()" style="background:#1D4ED8" id="remarks-hdr-btn">&#x1F4DD; Remarks</button>
+    <div class="snow-dd-wrap">
+      <button class="snow-dd-btn" id="snow-dd-btn" onclick="toggleSnowMenu()">&#x1F3AB; SNOW &#x25BE;</button>
+      <div class="snow-dd-menu" id="snow-dd-menu">
+        <div class="snow-dd-item" onclick="closeSnowMenu();openCreateIM()">&#x2795; Create Incident</div>
+        <div class="snow-dd-item" onclick="closeSnowMenu();openResolveIM('')">&#x2705; Resolve Incident</div>
+        <div class="snow-dd-item" onclick="closeSnowMenu();listIMs()">&#x1F513; List Open IM</div>
+        <div class="snow-dd-item" onclick="closeSnowMenu();openSearchIM()">&#x1F50D; Search IM</div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -134,21 +189,158 @@ textarea::placeholder{color:var(--muted)}
 
 <!-- Email Preview Modal -->
 <div id="modal">
-  <div class="modal-card">
+  <div class="modal-card" id="email-modal-card">
     <div class="modal-hdr">
       <span class="modal-title">&#x1F4E7; Email Preview</span>
       <input id="email-to" type="email" placeholder="recipient@company.com" value="{{ email_to }}">
       <button class="send-email-btn" id="send-email-btn" onclick="sendEmail()">&#x2709;&#xFE0F; Send Email</button>
-      <button class="close-btn" onclick="closeModal()">&#x2715; Close</button>
+      <button class="snow-min-btn" onclick="toggleSnowMin('email-modal-card')" title="Minimize">&#x2212;</button>
+      <button class="close-btn" onclick="closeModal()">&#x2715;</button>
     </div>
     <div id="modal-status"></div>
     <iframe id="email-frame" srcdoc=""></iframe>
   </div>
 </div>
 
+<!-- Create IM Modal -->
+<div class="snow-modal" id="snow-create-modal">
+  <div class="snow-card" id="snow-create-card">
+    <div class="snow-hdr">
+      <span class="snow-hdr-title">&#x1F3AB; Create ServiceNow Incident</span>
+      <div class="snow-hdr-btns">
+        <button class="snow-min-btn" onclick="toggleSnowMin('snow-create-card')" title="Minimize">&#x2212;</button>
+        <button class="close-btn" onclick="closeCreateIM()">&#x2715;</button>
+      </div>
+    </div>
+    <div class="snow-body">
+      <div class="snow-field">
+        <label>Short Description *</label>
+        <input id="ci-short" type="text" maxlength="100" placeholder="e.g. Backup failure — WApp03">
+      </div>
+      <div class="snow-field">
+        <label>Details *</label>
+        <textarea id="ci-desc" placeholder="Describe the backup issue in detail..."></textarea>
+      </div>
+      <div class="snow-field">
+        <label>Urgency</label>
+        <select id="ci-urgency">
+          <option value="1">1 — Critical</option>
+          <option value="2" selected>2 — High</option>
+          <option value="3">3 — Medium</option>
+        </select>
+      </div>
+      <div class="snow-field">
+        <label>Affected Object / VM (optional)</label>
+        <input id="ci-object" type="text" placeholder="e.g. WApp03, Linux_VM_Job, VBR1">
+      </div>
+    </div>
+    <div id="ci-status" class="snow-status"></div>
+    <div class="snow-footer">
+      <button class="close-btn" onclick="closeCreateIM()">Cancel</button>
+      <button class="snow-btn-submit" id="ci-submit" onclick="submitCreateIM()">&#x1F3AB; Create Incident</button>
+    </div>
+  </div>
+</div>
+
+<!-- Resolve IM Modal -->
+<div class="snow-modal" id="snow-resolve-modal">
+  <div class="snow-card" id="snow-resolve-card">
+    <div class="snow-hdr">
+      <span class="snow-hdr-title">&#x2705; Resolve ServiceNow Incident</span>
+      <div class="snow-hdr-btns">
+        <button class="snow-min-btn" onclick="toggleSnowMin('snow-resolve-card')" title="Minimize">&#x2212;</button>
+        <button class="close-btn" onclick="closeResolveIM()">&#x2715;</button>
+      </div>
+    </div>
+    <div class="snow-body">
+      <div class="snow-field">
+        <label>Incident Number *</label>
+        <input id="ri-inc" type="text" placeholder="INC0010001">
+      </div>
+      <div class="snow-field">
+        <label>Resolution Code *</label>
+        <select id="ri-code">
+          <option value="Solved (Permanently)">Solved (Permanently)</option>
+          <option value="Solved (Work Around)">Solved (Work Around)</option>
+          <option value="Not Solved (Not Reproducible)">Not Solved (Not Reproducible)</option>
+          <option value="Not Solved (Too Costly)">Not Solved (Too Costly)</option>
+          <option value="Closed/Resolved by Caller">Closed/Resolved by Caller</option>
+        </select>
+      </div>
+      <div class="snow-field">
+        <label>Resolution Notes * (what was done to fix it)</label>
+        <textarea id="ri-notes" placeholder="Describe the steps taken to resolve the issue..."></textarea>
+      </div>
+    </div>
+    <div id="ri-status" class="snow-status"></div>
+    <div class="snow-footer">
+      <button class="close-btn" onclick="closeResolveIM()">Cancel</button>
+      <button class="snow-btn-submit" id="ri-submit" onclick="submitResolveIM()">&#x2705; Resolve Incident</button>
+    </div>
+  </div>
+</div>
+
+<!-- Search IM Modal -->
+<div class="snow-modal" id="snow-search-modal">
+  <div class="snow-card" id="snow-search-card">
+    <div class="snow-hdr">
+      <span class="snow-hdr-title">&#x1F50D; Search ServiceNow Incident</span>
+      <div class="snow-hdr-btns">
+        <button class="snow-min-btn" onclick="toggleSnowMin('snow-search-card')" title="Minimize">&#x2212;</button>
+        <button class="close-btn" onclick="closeSearchIM()">&#x2715;</button>
+      </div>
+    </div>
+    <div class="snow-body">
+      <div class="snow-field">
+        <label>Incident Number *</label>
+        <input id="si-inc" type="text" placeholder="INC0010001" onkeydown="if(event.key==='Enter')submitSearchIM()">
+      </div>
+    </div>
+    <div id="si-status" class="snow-status"></div>
+    <div class="snow-footer">
+      <button class="close-btn" onclick="closeSearchIM()">Cancel</button>
+      <button class="snow-btn-submit" id="si-submit" onclick="submitSearchIM()">&#x1F50D; Search</button>
+    </div>
+  </div>
+</div>
+
+<!-- Remarks Modal -->
+<div id="remarks-modal">
+  <div class="rm-card" id="rm-card">
+    <div class="rm-hdr">
+      <span style="font-size:13px;font-weight:600">&#x1F4DD; Update Remarks &mdash; Failed Jobs</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button onclick="clearAllRemarks()" style="background:none;border:1px solid var(--fail);color:var(--fail);border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer">&#x1F5D1; Clear All</button>
+        <button class="snow-min-btn" onclick="toggleSnowMin('rm-card')" title="Minimize">&#x2212;</button>
+        <button onclick="closeRemarksModal()" style="background:none;border:none;color:var(--muted);font-size:17px;cursor:pointer;line-height:1;padding:2px 6px">&#x2715;</button>
+      </div>
+    </div>
+    <div id="rm-body" class="rm-body-wrap">
+      <div id="rm-loading" style="text-align:center;color:var(--muted);padding:30px">Loading failed jobs&hellip;</div>
+      <table id="rm-table" style="display:none;width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">VM / Object</th>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">Job</th>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">Server</th>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">Date</th>
+          <th style="text-align:left;padding:7px 10px;font-size:11px;color:var(--muted);border-bottom:2px solid var(--border);font-weight:600">Remark</th>
+        </tr></thead>
+        <tbody id="rm-rows"></tbody>
+      </table>
+      <div id="rm-empty" style="display:none;text-align:center;color:var(--muted);padding:30px">No failed jobs in the last 24 hours.</div>
+    </div>
+    <div id="rm-status" style="padding:0 16px 4px;font-size:12px;color:var(--muted);min-height:18px"></div>
+    <div class="rm-footer">
+      <button onclick="closeRemarksModal()" class="close-btn">Cancel</button>
+      <button id="rm-save" onclick="saveRemarks()" class="send-email-btn">&#x1F4BE; Save Remarks</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const ta=document.getElementById('q'),msgs=document.getElementById('msgs'),btn=document.getElementById('btn');
 let _healthHtml='';
+let _pingGen=0; // incremented each warm-ping so stale ones don't release send
 
 const PROVIDER_MODELS={{ provider_models | tojson }};
 let _currentProvider='{{ provider }}';
@@ -216,6 +408,263 @@ function addTyping(){
   return row;
 }
 
+function toggleSnowMenu(){
+  const btn=document.getElementById('snow-dd-btn');
+  const menu=document.getElementById('snow-dd-menu');
+  const open=menu.classList.toggle('open');
+  btn.classList.toggle('open',open);
+}
+function closeSnowMenu(){
+  document.getElementById('snow-dd-menu').classList.remove('open');
+  document.getElementById('snow-dd-btn').classList.remove('open');
+}
+document.addEventListener('click',function(e){
+  if(!e.target.closest('.snow-dd-wrap')) closeSnowMenu();
+});
+
+async function listIMs(){
+  const tr=addTyping();
+  try{
+    const r=await fetch('/list-incidents');
+    const d=await r.json();
+    tr.remove();
+    if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
+    else if(!d.incidents||d.incidents.length===0){addMsg('bot','No open incidents found in ServiceNow.');}
+    else{
+      const STATE_COLOR={'New':'warn','In Progress':'warn','On Hold':'muted','Resolved':'ok','Closed':'ok'};
+      let html=`<b>${d.incidents.length} Open Incident(s) in ServiceNow:</b><br><br>`;
+      for(const i of d.incidents){
+        const sc=STATE_COLOR[i.state]||'muted';
+        html+=`<b>${esc(i.number)}</b> &mdash; ${esc(i.summary)}<br>`;
+        html+=`&nbsp;&nbsp;<span class="${sc}">${esc(i.state)}</span> &middot; ${esc(i.urgency)} &middot; Opened: ${esc(i.opened_at)}<br>`;
+        html+=`&nbsp;&nbsp;&#x1F464; <b>Assigned:</b> ${esc(i.assigned_to)}<br>`;
+        if(i.description){html+=`&nbsp;&nbsp;<span style="color:var(--muted);font-size:12px">${esc(i.description.substring(0,120))}${i.description.length>120?'...':''}</span><br>`;}
+        html+='<br>';
+      }
+      addMsg('bot',html);
+    }
+  }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
+}
+
+function toggleSnowMin(cardId){
+  const card=document.getElementById(cardId);
+  const btn=card.querySelector('.snow-min-btn');
+  card.classList.toggle('minimized');
+  btn.innerHTML=card.classList.contains('minimized')?'&#x25A1;':'&#x2212;';
+}
+
+// Drag — all floating cards (SNOW + email + remarks)
+function _attachDrag(card, hdrSel){
+  const hdr=card.querySelector(hdrSel);
+  if(!hdr)return;
+  hdr.addEventListener('mousedown',function(e){
+    if(e.target.closest('button')||e.target.closest('input'))return;
+    const r=card.getBoundingClientRect();
+    card.style.transform='none';card.style.right='auto';
+    card.style.left=r.left+'px';card.style.top=r.top+'px';
+    _dc=card;_ox=e.clientX-r.left;_oy=e.clientY-r.top;
+    e.preventDefault();
+  });
+}
+let _dc=null,_ox=0,_oy=0;
+(function(){
+  document.querySelectorAll('.snow-card').forEach(c=>_attachDrag(c,'.snow-hdr'));
+  _attachDrag(document.getElementById('email-modal-card'),'.modal-hdr');
+  _attachDrag(document.getElementById('rm-card'),'.rm-hdr');
+  document.addEventListener('mousemove',function(e){
+    if(!_dc)return;
+    _dc.style.left=(e.clientX-_ox)+'px';
+    _dc.style.top=Math.max(0,e.clientY-_oy)+'px';
+  });
+  document.addEventListener('mouseup',function(){_dc=null;});
+})();
+
+function _resetCard(cardId){
+  const card=document.getElementById(cardId);
+  card.style.left='';card.style.top='';card.style.right='';card.style.transform='';
+  card.classList.remove('minimized');
+  card.querySelector('.snow-min-btn').innerHTML='&#x2212;';
+}
+function _positionCenter(cardId){
+  const card=document.getElementById(cardId);
+  const w=card.offsetWidth||800;
+  card.style.left=Math.max(20,Math.round((window.innerWidth-w)/2))+'px';
+  card.style.top='55px';
+  card.style.transform='none';
+  card.classList.remove('minimized');
+  const mb=card.querySelector('.snow-min-btn');
+  if(mb)mb.innerHTML='&#x2212;';
+}
+
+function openSearchIM(){
+  _resetCard('snow-search-card');
+  document.getElementById('si-inc').value='';
+  document.getElementById('si-status').style.display='none';
+  document.getElementById('si-submit').disabled=false;
+  document.getElementById('si-submit').textContent='🔍 Search';
+  document.getElementById('snow-search-modal').style.display='block';
+  setTimeout(()=>document.getElementById('si-inc').focus(),100);
+}
+function closeSearchIM(){document.getElementById('snow-search-modal').style.display='none';}
+
+async function submitSearchIM(){
+  const inc=document.getElementById('si-inc').value.trim().toUpperCase();
+  if(!inc){_snowStatus('si-status','Incident number is required','#e74c3c');return;}
+  const submitBtn=document.getElementById('si-submit');
+  submitBtn.disabled=true;
+  submitBtn.textContent='Searching…';
+  _snowStatus('si-status','Looking up '+inc+' in ServiceNow…','#3498db');
+  try{
+    const r=await fetch('/get-incident?number='+encodeURIComponent(inc));
+    const d=await r.json();
+    if(d.error){
+      _snowStatus('si-status','⚠️ '+d.error,'#e74c3c');
+      submitBtn.disabled=false;submitBtn.textContent='🔍 Search';
+      return;
+    }
+    closeSearchIM();
+    const im=d.incident;
+    const resolved=im.state==='Resolved'||im.state==='Closed';
+    const inprog=im.state==='In Progress';
+    const sc=resolved?'ok':inprog?'warn':'warn';
+    let html=`<b style="font-size:14px">&#x1F3AB; ${esc(im.number)}</b> &nbsp;<span class="${sc}" style="padding:2px 8px;border-radius:10px;font-size:11px">${esc(im.state)}</span><br><br>`;
+    html+=`<b>Summary:</b> ${esc(im.summary)}<br>`;
+    html+=`<b>Priority:</b> ${esc(im.priority)} &nbsp;&middot;&nbsp; <b>Urgency:</b> ${esc(im.urgency)}<br>`;
+    html+=`<b>Assigned To:</b> ${esc(im.assigned_to)}<br>`;
+    html+=`<b>Group:</b> ${esc(im.assignment_group)}<br>`;
+    html+=`<b>Opened:</b> ${esc(im.opened_at)}`;
+    if(im.resolved_at) html+=` &nbsp;&middot;&nbsp; <b>Resolved:</b> ${esc(im.resolved_at)}`;
+    if(im.description) html+=`<br><br><b>Description:</b><br><span style="white-space:pre-wrap;color:var(--muted);font-size:12px">${esc(im.description)}</span>`;
+    if(im.close_notes) html+=`<br><br><b>Resolution Notes:</b><br><span style="white-space:pre-wrap;color:var(--muted);font-size:12px">${esc(im.close_notes)}</span>`;
+    addMsg('bot',html);
+  }catch(e){
+    _snowStatus('si-status','⚠️ Request failed','#e74c3c');
+    submitBtn.disabled=false;submitBtn.textContent='🔍 Search';
+  }
+}
+
+// ── Remarks modal ───────────────────────────────────────────────────────────
+async function openRemarksModal(){
+  _positionCenter('rm-card');
+  document.getElementById('remarks-modal').style.display='block';
+  document.getElementById('rm-loading').style.display='block';
+  document.getElementById('rm-table').style.display='none';
+  document.getElementById('rm-empty').style.display='none';
+  document.getElementById('rm-status').textContent='';
+  document.getElementById('rm-save').disabled=false;
+  try{
+    const r=await fetch('/failed-jobs-list');
+    const d=await r.json();
+    document.getElementById('rm-loading').style.display='none';
+    if(d.error){document.getElementById('rm-status').textContent='⚠️ '+d.error;return;}
+    if(!d.jobs||d.jobs.length===0){document.getElementById('rm-empty').style.display='block';return;}
+    const tbody=document.getElementById('rm-rows');
+    tbody.innerHTML='';
+    // Group by job_key
+    const groups={};
+    const groupOrder=[];
+    for(const j of d.jobs){
+      if(!groups[j.job_key]){groups[j.job_key]=[];groupOrder.push(j.job_key);}
+      groups[j.job_key].push(j);
+    }
+    const inp_style='width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:12px;font-family:inherit;outline:none';
+    const td_s='padding:6px 10px;border-bottom:1px solid var(--border)';
+    for(const jk of groupOrder){
+      const vms=groups[jk];
+      const first=vms[0];
+      const jobInputId='rmj-'+jk.replace(/[^a-zA-Z0-9]/g,'_');
+      const multiVM=vms.length>1;
+      // Job header row (always shown; if 1 VM acts as the single row)
+      const jobTr=document.createElement('tr');
+      jobTr.style.background='rgba(255,255,255,.04)';
+      const vmCount=multiVM?`<span style="color:var(--muted);font-size:11px"> (${vms.length} VMs)</span>`:'';
+      const fillHint=multiVM?`<span style="font-size:10px;color:var(--muted)"> — fills all VMs below if blank</span>`:'';
+      jobTr.innerHTML=`
+        <td colspan="3" style="${td_s}border-left:3px solid var(--accent)">
+          <b style="font-size:12px">&#x1F4BC; ${esc(first.job_name)}</b>${vmCount} &nbsp;<span style="color:var(--muted);font-size:11px">${esc(first.vbr_server)}</span>
+        </td>
+        <td style="${td_s}color:var(--muted);font-size:11px;white-space:nowrap">${esc(first.backup_date)}</td>
+        <td style="padding:4px 10px;border-bottom:1px solid var(--border)">
+          <input id="${jobInputId}" data-key="${esc(jk)}" type="text" value="${esc(first.job_remark)}"
+            placeholder="${multiVM?'Remark for all VMs in this job…':'e.g. CBT reset done, monitoring…'}"
+            style="${inp_style}"
+            ${multiVM?`oninput="document.querySelectorAll('[data-jobkey=\\'${jk}\\']').forEach(i=>{if(!i._touched)i.value=this.value})"`:''}>
+          ${fillHint}
+        </td>`;
+      tbody.appendChild(jobTr);
+      // Individual VM rows (only when multiple VMs)
+      if(multiVM){
+        for(const j of vms){
+          const vmTr=document.createElement('tr');
+          const vmInputId='rmv-'+j.key.replace(/[^a-zA-Z0-9]/g,'_');
+          vmTr.innerHTML=`
+            <td style="${td_s}padding-left:22px;color:var(--muted);font-size:12px" colspan="3">
+              &#x21B3; <b>${esc(j.object)}</b>
+            </td>
+            <td style="${td_s}"></td>
+            <td style="padding:4px 10px;border-bottom:1px solid var(--border)">
+              <input id="${vmInputId}" data-key="${esc(j.key)}" data-jobkey="${esc(jk)}" type="text" value="${esc(j.remark)}"
+                placeholder="Override (leave blank to use job remark)"
+                style="${inp_style};font-size:11px;color:var(--muted)"
+                oninput="this._touched=!!this.value">
+            </td>`;
+          tbody.appendChild(vmTr);
+        }
+      }
+    }
+    document.getElementById('rm-table').style.display='table';
+  }catch(e){
+    document.getElementById('rm-loading').style.display='none';
+    document.getElementById('rm-status').textContent='⚠️ Connection error';
+  }
+}
+function closeRemarksModal(){document.getElementById('remarks-modal').style.display='none';}
+
+async function saveRemarks(){
+  const inputs=document.querySelectorAll('#rm-rows input[data-key]');
+  const remarks={};
+  inputs.forEach(inp=>{ remarks[inp.dataset.key]=inp.value; });
+  document.getElementById('rm-save').disabled=true;
+  document.getElementById('rm-save').textContent='Saving…';
+  document.getElementById('rm-status').textContent='';
+  try{
+    const r=await fetch('/set-remarks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({remarks})});
+    const d=await r.json();
+    if(d.success){
+      _healthHtml=d.html;
+      if(document.getElementById('modal').style.display==='block'){
+        document.getElementById('email-frame').srcdoc=_healthHtml;
+      }
+      const n=d.count;
+      document.getElementById('rm-status').style.color='#16A34A';
+      document.getElementById('rm-status').textContent=`✅ ${n} remark(s) saved — report updated`;
+      addMsg('bot',`&#x1F4DD; Remarks saved (${n} job${n===1?'':'s'}). Report updated with inline remarks.`);
+      setTimeout(closeRemarksModal,1400);
+    }else{
+      document.getElementById('rm-status').textContent='⚠️ '+(d.error||'Save failed');
+      document.getElementById('rm-save').disabled=false;document.getElementById('rm-save').textContent='💾 Save Remarks';
+    }
+  }catch(e){
+    document.getElementById('rm-status').textContent='⚠️ Connection error';
+    document.getElementById('rm-save').disabled=false;document.getElementById('rm-save').textContent='💾 Save Remarks';
+  }
+}
+
+async function clearAllRemarks(){
+  if(!confirm('Clear all remarks from the report?'))return;
+  const r=await fetch('/clear-remarks',{method:'POST'});
+  const d=await r.json();
+  if(d.success){
+    _healthHtml=d.html;
+    if(document.getElementById('modal').style.display==='block'){
+      document.getElementById('email-frame').srcdoc=_healthHtml;
+    }
+    addMsg('bot','All remarks cleared. &#x1F5D1;&#xFE0F;');
+    closeRemarksModal();
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const HEALTH_TRIGGERS=[
   'health report','healthcheck','health check',
   'backup report','backup health','backup status report',
@@ -275,59 +724,16 @@ async function send(){
     return;
   }
 
-  if(isRemoveRequest(q)){
-    btn.disabled=true;
-    const tr=addTyping();
-    try{
-      const r=await fetch('/remove-remark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:q})});
-      const d=await r.json();
-      tr.remove();
-      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
-      else{
-        addMsg('bot',renderMd(d.message));
-        _healthHtml=d.html;
-        if(document.getElementById('modal').style.display==='block'){
-          document.getElementById('email-frame').srcdoc=_healthHtml;
-        } else {
-          document.getElementById('modal').style.display='block';
-          document.getElementById('modal-status').style.display='none';
-          document.getElementById('email-frame').srcdoc=_healthHtml;
-        }
-      }
-    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
-    btn.disabled=false;ta.focus();
-    return;
-  }
-
-  if(isClearRequest(q)){
-    await fetch('/clear-remarks',{method:'POST'});
-    addMsg('bot','All remarks cleared. &#x1F5D1;&#xFE0F; The report is back to its original state.');
-    if(document.getElementById('modal').style.display==='block') healthReport();
+  if(isRemoveRequest(q)||isRemarkRequest(q)){
+    addMsg('bot','Opening the <b>&#x1F4DD; Remarks</b> panel — add or clear remarks per failed job, then save.');
+    openRemarksModal();
     ta.focus();
     return;
   }
 
-  if(isRemarkRequest(q)){
-    btn.disabled=true;
-    const tr=addTyping();
-    try{
-      const r=await fetch('/add-remark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:q})});
-      const d=await r.json();
-      tr.remove();
-      if(d.error){addMsg('err','&#x26A0;&#xFE0F; '+esc(d.error));}
-      else{
-        addMsg('bot',renderMd(d.message+'\n\nThe report has been updated with this remark. &#x1F4DD;'));
-        _healthHtml=d.html;
-        if(document.getElementById('modal').style.display==='block'){
-          document.getElementById('email-frame').srcdoc=_healthHtml;
-        } else {
-          document.getElementById('modal').style.display='block';
-          document.getElementById('modal-status').style.display='none';
-          document.getElementById('email-frame').srcdoc=_healthHtml;
-        }
-      }
-    }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error.');}
-    btn.disabled=false;ta.focus();
+  if(isClearRequest(q)){
+    clearAllRemarks();
+    ta.focus();
     return;
   }
 
@@ -336,12 +742,18 @@ async function send(){
   try{
     const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
     const d=await r.json();
-    tr.remove();addMsg('bot',renderMd(d.answer));
+    tr.remove();
+    if(d.snow_form&&d.snow_form.type==='resolve'){
+      addSnowResolveForm(d.answer, d.snow_form.inc_number);
+    } else {
+      addMsg('bot',renderMd(d.answer));
+    }
   }catch(e){tr.remove();addMsg('err','&#x26A0;&#xFE0F; Connection error. Please try again.');}
   btn.disabled=false;ta.focus();
 }
 
 async function healthReport(){
+  _positionCenter('email-modal-card');
   document.getElementById('modal').style.display='block';
   document.getElementById('modal-status').style.display='none';
   document.getElementById('email-frame').srcdoc=
@@ -399,6 +811,151 @@ function closeModal(){
   document.getElementById('modal-status').style.display='none';
 }
 
+function openCreateIM(){
+  _resetCard('snow-create-card');
+  document.getElementById('ci-short').value='';
+  document.getElementById('ci-desc').value='';
+  document.getElementById('ci-object').value='';
+  document.getElementById('ci-urgency').value='2';
+  document.getElementById('ci-status').style.display='none';
+  document.getElementById('ci-submit').disabled=false;
+  document.getElementById('ci-submit').textContent='🎫 Create Incident';
+  document.getElementById('snow-create-modal').style.display='block';
+}
+function closeCreateIM(){document.getElementById('snow-create-modal').style.display='none';}
+
+function openResolveIM(incNumber){
+  _resetCard('snow-resolve-card');
+  document.getElementById('ri-inc').value=incNumber||'';
+  document.getElementById('ri-notes').value='';
+  document.getElementById('ri-code').value='Solved (Permanently)';
+  document.getElementById('ri-status').style.display='none';
+  document.getElementById('ri-submit').disabled=false;
+  document.getElementById('ri-submit').textContent='✅ Resolve Incident';
+  document.getElementById('snow-resolve-modal').style.display='block';
+  if(!incNumber) document.getElementById('ri-inc').focus();
+  else document.getElementById('ri-notes').focus();
+}
+function closeResolveIM(){document.getElementById('snow-resolve-modal').style.display='none';}
+
+function _snowStatus(elId, msg, color){
+  const el=document.getElementById(elId);
+  el.style.cssText=`display:block;padding:10px 18px;font-size:12px;background:${color==='ok'?'#D1FAE5':color==='err'?'#FEE2E2':'#FEF3C7'};color:${color==='ok'?'#065F46':color==='err'?'#991B1B':'#92400E'}`;
+  el.textContent=msg;
+}
+
+async function submitCreateIM(){
+  const shortDesc=document.getElementById('ci-short').value.trim();
+  const desc=document.getElementById('ci-desc').value.trim();
+  const urgency=document.getElementById('ci-urgency').value;
+  const obj=document.getElementById('ci-object').value.trim();
+  document.getElementById('ci-short').classList.remove('err');
+  document.getElementById('ci-desc').classList.remove('err');
+  if(!shortDesc){document.getElementById('ci-short').classList.add('err');return;}
+  if(!desc){document.getElementById('ci-desc').classList.add('err');return;}
+  const fullDesc=obj?`${desc}\n\nAffected Object: ${obj}`:desc;
+  const submitBtn=document.getElementById('ci-submit');
+  submitBtn.disabled=true;submitBtn.textContent='Creating...';
+  try{
+    const r=await fetch('/create-incident',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({short_description:shortDesc,description:fullDesc,urgency:parseInt(urgency)})});
+    const d=await r.json();
+    if(d.success){
+      _snowStatus('ci-status',d.message.replace(/\*\*/g,''),'ok');
+      addMsg('bot',renderMd(d.message));
+      setTimeout(closeCreateIM,1800);
+    }else{
+      _snowStatus('ci-status',d.error||'Failed to create incident','err');
+      submitBtn.disabled=false;submitBtn.textContent='🎫 Create Incident';
+    }
+  }catch(e){
+    _snowStatus('ci-status','Connection error. Please try again.','err');
+    submitBtn.disabled=false;submitBtn.textContent='🎫 Create Incident';
+  }
+}
+
+async function submitResolveIM(){
+  const incNumber=document.getElementById('ri-inc').value.trim().toUpperCase();
+  const code=document.getElementById('ri-code').value;
+  const notes=document.getElementById('ri-notes').value.trim();
+  document.getElementById('ri-inc').classList.remove('err');
+  document.getElementById('ri-notes').classList.remove('err');
+  if(!incNumber){document.getElementById('ri-inc').classList.add('err');return;}
+  if(!notes){document.getElementById('ri-notes').classList.add('err');return;}
+  const submitBtn=document.getElementById('ri-submit');
+  submitBtn.disabled=true;submitBtn.textContent='Resolving...';
+  try{
+    const r=await fetch('/resolve-incident',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({inc_number:incNumber,resolution_code:code,resolution_notes:notes})});
+    const d=await r.json();
+    if(d.success){
+      _snowStatus('ri-status',d.message.replace(/\*\*/g,''),'ok');
+      addMsg('bot',renderMd(d.message));
+      setTimeout(closeResolveIM,1800);
+    }else{
+      _snowStatus('ri-status',d.error||'Failed to resolve incident','err');
+      submitBtn.disabled=false;submitBtn.textContent='✅ Resolve Incident';
+    }
+  }catch(e){
+    _snowStatus('ri-status','Connection error. Please try again.','err');
+    submitBtn.disabled=false;submitBtn.textContent='✅ Resolve Incident';
+  }
+}
+
+const _LOCAL_PROVIDERS_UI=new Set(['lmstudio']);
+
+function _updatePingVisibility(provider){
+  const btn=document.getElementById('ping-btn');
+  const res=document.getElementById('ping-result');
+  if(_LOCAL_PROVIDERS_UI.has(provider)){
+    btn.style.display='';
+  }else{
+    btn.style.display='none';
+    res.style.display='none';
+    res.textContent='';
+  }
+}
+_updatePingVisibility(_currentProvider);
+
+async function pingProvider(warm=false){
+  const pingBtn=document.getElementById('ping-btn');
+  const sendBtn=document.getElementById('btn');
+  const res=document.getElementById('ping-result');
+  const myGen=warm?++_pingGen:_pingGen; // each warm-ping gets a unique generation
+  const modelPinged=_currentModel;
+  pingBtn.disabled=true;
+  pingBtn.textContent='Testing…';
+  res.style.display='';
+  if(warm){
+    sendBtn.disabled=true;
+    res.style.color='var(--muted)';
+    res.textContent='⏳ Warming up '+modelPinged+'…';
+  }else{
+    res.style.color='var(--muted)';
+    res.textContent='…';
+  }
+  try{
+    const r=await fetch('/ping-provider',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:_currentProvider,model:modelPinged})});
+    const d=await r.json();
+    // If a newer warm-ping started (user switched model again), discard this stale result
+    if(warm&&myGen!==_pingGen){pingBtn.disabled=false;pingBtn.textContent='📡 Test';return;}
+    if(d.ok){
+      res.style.color='#4ade80';
+      res.textContent='✓ '+modelPinged+' ready ('+d.ms+'ms)';
+    }else{
+      res.style.color='#f87171';
+      res.textContent='✗ '+(d.error||'No response');
+    }
+  }catch(e){
+    if(warm&&myGen!==_pingGen){pingBtn.disabled=false;pingBtn.textContent='📡 Test';return;}
+    res.style.color='#f87171';
+    res.textContent='✗ Cannot reach server';
+  }
+  pingBtn.disabled=false;
+  pingBtn.textContent='📡 Test';
+  if(warm&&myGen===_pingGen) sendBtn.disabled=false;
+}
+
 async function switchProvider(provider){
   const pSel=document.getElementById('provider-select');
   const mSel=document.getElementById('model-select');
@@ -414,6 +971,9 @@ async function switchProvider(provider){
       _currentModel=d.model;
       document.querySelector('.hdr-info p').textContent='BackupPulse \xb7 '+provider;
       populateModelDropdown(provider, d.model);
+      _updatePingVisibility(provider);
+      // Auto-ping when switching to a local provider
+      if(_LOCAL_PROVIDERS_UI.has(provider)) pingProvider(true);
       addMsg('bot','Switched to <b>'+provider+'</b> &mdash; <b>'+d.model+'</b>. Your next question will use this model.');
     }else{
       addMsg('err','&#x26A0;&#xFE0F; '+(d.error||'Failed to switch provider'));

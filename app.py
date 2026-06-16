@@ -77,7 +77,49 @@ def _save_remarks(remarks):
     except Exception:
         pass
 
-_remarks = []  # always start fresh; saved to file mid-session only
+_remarks = {}  # keyed by "vbr_server|job_name|failed_object_name" → remark text
+
+# Incident resolution log — description + resolution only, used as LLM context
+_INCIDENTS_LOG = os.path.join(_log_dir, 'incidents.jsonl')
+
+def _log_incident_resolution(description: str, resolution: str):
+    try:
+        with open(_INCIDENTS_LOG, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                "description": description,
+                "resolution":  resolution,
+                "resolved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }, ensure_ascii=False) + '\n')
+        log.info(f"[INCIDENTS] resolution logged")
+    except Exception as exc:
+        log.warning(f"[INCIDENTS] write failed: {exc}")
+
+def _find_past_resolution(error_text: str) -> str | None:
+    """Scan incidents.jsonl for a past resolution matching the error. Returns suggestion string or None."""
+    if not error_text or not os.path.exists(_INCIDENTS_LOG):
+        return None
+    keywords = [w for w in error_text.lower().split() if len(w) > 4]
+    best, best_score = None, 0
+    try:
+        with open(_INCIDENTS_LOG, encoding='utf-8') as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                except Exception:
+                    continue
+                rec_desc = (rec.get('description') or '').lower()
+                score = sum(1 for kw in keywords if kw in rec_desc)
+                if score > best_score:
+                    best, best_score = rec, score
+    except Exception:
+        pass
+    if best and best_score >= 3:
+        return (f"[PAST RESOLUTION from incident log]\n"
+                f"Similar error seen before: {best['description']}\n"
+                f"How it was resolved: {best['resolution']}\n"
+                f"Resolved on: {best.get('resolved_at','')}\n"
+                f"Suggest this resolution if applicable.\n")
+    return None
 
 # ============================================================
 # CONFIG
@@ -98,7 +140,7 @@ OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
 # LM Studio — local, air-gapped, zero external calls
 LMSTUDIO_URL   = os.getenv("LMSTUDIO_URL",   "http://localhost:1234/v1/chat/completions")
-LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "phi-3.5-mini-instruct")
+LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "phi-4-mini-instruct")
 
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL    = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -108,8 +150,11 @@ COPILOT_API_KEY = os.getenv("COPILOT_API_KEY", "")
 COPILOT_MODEL   = os.getenv("COPILOT_MODEL", "gpt-4o")
 COPILOT_URL     = os.getenv("COPILOT_URL", "https://api.githubcopilot.com/chat/completions")
 
-OLLAMA_URL      = os.getenv("OLLAMA_URL", "http://localhost:11434/v1/chat/completions")
-OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "phi3.5")
+SNOW_INSTANCE         = os.getenv("SNOW_INSTANCE", "")
+SNOW_USER             = os.getenv("SNOW_USER", "")
+SNOW_PASS             = os.getenv("SNOW_PASS", "")
+SNOW_ASSIGNMENT_GROUP = os.getenv("SNOW_ASSIGNMENT_GROUP", "")
+
 
 # Known selectable models per provider (shown in the UI dropdown)
 # Groq & OpenRouter: verified free models as of 2026
@@ -144,11 +189,7 @@ PROVIDER_MODELS = {
     # Local models — must be downloaded and loaded in LM Studio / pulled in Ollama first
     # Q4_K_M quantization recommended (~2-3 GB RAM each).
     "lmstudio": [
-        "phi-3.5-mini-instruct",   # 3.8B — best instruction following on CPU
-        "phi-4-mini-instruct",     # 3.8B — newer Phi, better reasoning
-    ],
-    "ollama": [
-        "phi3:mini",
+        "phi-4-mini-instruct",
     ],
 }
 
@@ -161,7 +202,6 @@ def _get_active_model():
         "openai":      OPENAI_MODEL,
         "copilot":     COPILOT_MODEL,
         "lmstudio":    LMSTUDIO_MODEL,
-        "ollama":      OLLAMA_MODEL,
     }.get(MODEL_PROVIDER, "")
 
 
@@ -192,7 +232,7 @@ def _load_file(filename, fallback=""):
             return f.read().strip()
     return fallback
 
-_LOCAL_PROVIDERS = {"lmstudio", "ollama"}
+_LOCAL_PROVIDERS = {"lmstudio"}
 if MODEL_PROVIDER in _LOCAL_PROVIDERS:
     _SYSTEM_PROMPT = _load_file("system_prompt_local.txt", "You are a Veeam backup assistant. Explain the results clearly.")
     _SQL_PROMPT    = _load_file("sql_prompt_local.txt",    "Return a PostgreSQL SELECT query only. No explanation.")
@@ -212,7 +252,7 @@ def call_openai_compatible(prompt, system, url, api_key, model, max_tokens=500):
     if system:
         msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
-    req_timeout = 300 if "localhost" in url or "127.0.0.1" in url else 30
+    req_timeout = 120 if "localhost" in url or "127.0.0.1" in url else 30
     log.info(f"[LLM] calling model={model} max_tokens={max_tokens} prompt_len={len(prompt)}")
     t0 = time.perf_counter()
     r = requests.post(
@@ -265,8 +305,6 @@ def call_llm(prompt, system=None, max_tokens=500):
         return call_openai_compatible(prompt, system, OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL, max_tokens)
     elif MODEL_PROVIDER == "lmstudio":
         return call_openai_compatible(prompt, system, LMSTUDIO_URL, "lm-studio", LMSTUDIO_MODEL, max_tokens)
-    elif MODEL_PROVIDER == "ollama":
-        return call_openai_compatible(prompt, system, OLLAMA_URL, "", OLLAMA_MODEL, max_tokens)
     return "No valid provider configured."
 
 
@@ -313,19 +351,25 @@ def _format_rows(question, rows):
         from collections import defaultdict
         grouped = defaultdict(lambda: defaultdict(list))
         for r in rows[:60]:
-            srv, job, obj = r.get("vbr_server","?"), r.get("job_name","?"), r.get("failed_object_name","?")
+            srv  = r.get("vbr_server", "?")
+            job  = r.get("job_name", "?")
+            obj  = r.get("failed_object_name", "?")
             otype = r.get("object_type", "")
+            msg  = r.get("failure_message", "")
             label = f"{obj}" + (f" ({otype})" if otype else "")
-            if label not in grouped[srv][job]:
-                grouped[srv][job].append(label)
+            entry = (label, msg)
+            if entry not in grouped[srv][job]:
+                grouped[srv][job].append(entry)
         total = sum(len(o) for s in grouped.values() for o in s.values())
         lines = [f"**{total} failed backup(s):**\n"]
         for srv, jobs in grouped.items():
             lines.append(f"**{srv}**")
-            for job, objs in jobs.items():
+            for job, entries in jobs.items():
                 lines.append(f"  • {job}")
-                for o in objs:
-                    lines.append(f"    – {o} ❌")
+                for label, msg in entries:
+                    lines.append(f"    – {label} ❌")
+                    if msg:
+                        lines.append(f"      _{msg}_")
         lines.append("\nReview and retry failed jobs or check the affected servers.")
         return "\n".join(lines)
 
@@ -415,6 +459,88 @@ def _log_qa(question, answer, duration, provider):
         log.warning(f"[QA LOG] write failed: {exc}")
 
 
+_SNOW_TRIGGER = re.compile(
+    r'\b(create|raise|open|log|file)\s+(im|incident|ticket|inc)\b',
+    re.IGNORECASE
+)
+_SNOW_RESOLVE_TRIGGER = re.compile(
+    r'\b(resolve|close|fix|solved?|complete)\s+(im|incident|ticket|inc)\b',
+    re.IGNORECASE
+)
+
+
+def create_snow_incident(short_description, description, urgency=2, impact=2):
+    from requests.auth import HTTPBasicAuth
+    if not SNOW_INSTANCE or not SNOW_USER:
+        raise Exception("ServiceNow not configured. Add SNOW_INSTANCE, SNOW_USER, SNOW_PASS to config_final.env")
+    url = f"{SNOW_INSTANCE}/api/now/table/incident"
+    payload = {
+        "short_description": short_description,
+        "description":       description,
+        "urgency":           str(urgency),
+        "impact":            str(impact),
+        "category":          "infrastructure",
+        "subcategory":       "backup",
+        "caller_id":         SNOW_USER,
+    }
+    if SNOW_ASSIGNMENT_GROUP:
+        payload["assignment_group"] = SNOW_ASSIGNMENT_GROUP
+    log.info(f"[SNOW] creating incident short_desc={short_description!r} urgency={urgency}")
+    r = requests.post(
+        url,
+        auth=HTTPBasicAuth(SNOW_USER, SNOW_PASS),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        json=payload,
+        timeout=30
+    )
+    if not r.ok:
+        log.error(f"[SNOW] FAILED status={r.status_code} error={r.text[:200]}")
+        raise Exception(f"ServiceNow error {r.status_code}: {r.text[:200]}")
+    result = r.json()["result"]
+    inc_number = result["number"]
+    inc_url    = f"{SNOW_INSTANCE}/nav_to.do?uri=incident.do?sysparm_query=number={inc_number}"
+    log.info(f"[SNOW] created {inc_number}")
+    return inc_number, inc_url
+
+
+def resolve_snow_incident(inc_number, resolution_code, resolution_notes):
+    from requests.auth import HTTPBasicAuth
+    if not SNOW_INSTANCE or not SNOW_USER:
+        raise Exception("ServiceNow not configured.")
+    auth = HTTPBasicAuth(SNOW_USER, SNOW_PASS)
+    # Get sys_id by incident number
+    r = requests.get(
+        f"{SNOW_INSTANCE}/api/now/table/incident",
+        auth=auth,
+        headers={"Accept": "application/json"},
+        params={"sysparm_query": f"number={inc_number}", "sysparm_fields": "sys_id,number,short_description,description"},
+        timeout=30
+    )
+    results = r.json().get("result", [])
+    if not results:
+        raise Exception(f"Incident {inc_number} not found in ServiceNow")
+    sys_id      = results[0]["sys_id"]
+    description = results[0].get("description") or results[0].get("short_description", "")
+    log.info(f"[SNOW] resolving {inc_number} sys_id={sys_id} code={resolution_code!r}")
+    r = requests.patch(
+        f"{SNOW_INSTANCE}/api/now/table/incident/{sys_id}",
+        auth=auth,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        json={
+            "state":      "6",
+            "close_code":  resolution_code,
+            "close_notes": resolution_notes,
+            "resolved_by": SNOW_USER,
+        },
+        timeout=30
+    )
+    if not r.ok:
+        log.error(f"[SNOW] resolve FAILED status={r.status_code} error={r.text[:200]}")
+        raise Exception(f"ServiceNow error {r.status_code}: {r.text[:200]}")
+    log.info(f"[SNOW] resolved {inc_number}")
+    return inc_number, description
+
+
 def process_question(question):
     t0 = time.perf_counter()
     log.info(f"[CHAT] question={question!r}")
@@ -425,29 +551,97 @@ def process_question(question):
         reply = "Hey! Ask me anything about your backup environment — failed jobs, restore points, repository capacity, or generate a health report."
         log.info(f"[CHAT] instant greeting — {round(time.perf_counter()-t0,3)}s")
 
-    else:
-        # Build SQL via LLM
-        if MODEL_PROVIDER in _LOCAL_PROVIDERS:
-            raw_sql = call_llm(question, load_sql_prompt(), max_tokens=250)
+    elif _SNOW_RESOLVE_TRIGGER.search(question):
+        m = re.search(r'\bINC\d+\b', question, re.IGNORECASE)
+        inc_number = m.group().upper() if m else None
+        if not inc_number:
+            reply = "Please include the incident number. Example: **Resolve INC0010001**"
         else:
-            sql_user = (
-                "Generate a PostgreSQL SELECT query to answer this question:\n"
-                + question + "\n"
-                "If NOT a data question, reply DIRECT: followed by a short answer.\n"
-                "Otherwise SQL only. No markdown."
+            return {"answer": f"To resolve **{inc_number}**, fill in the mandatory fields below:", "snow_form": {"type": "resolve", "inc_number": inc_number}}
+
+    elif _SNOW_TRIGGER.search(question):
+        try:
+            extract_prompt = (
+                f'The engineer wants to create a ServiceNow incident. Their message:\n"{question}"\n\n'
+                'Extract the following fields:\n'
+                '- short_description: one-line summary, max 100 chars\n'
+                '- description: full details of the issue\n'
+                '- urgency: integer 1=Critical 2=High 3=Medium (default 2)\n\n'
+                'Return JSON only, no explanation:\n'
+                '{"short_description": "...", "description": "...", "urgency": 2}'
             )
-            raw_sql = call_llm(sql_user, load_sql_prompt(), max_tokens=300)
-            sql_clean = re.sub(r"```sql|```", "", raw_sql).strip()
-            if sql_clean.upper().startswith("DIRECT:"):
-                reply = sql_clean[7:].strip()
-                log.info(f"[CHAT] DIRECT answer — {round(time.perf_counter()-t0,3)}s")
+            raw = call_llm(extract_prompt, "Extract incident fields. Return JSON only.", max_tokens=200)
+            m = re.search(r'\{.*?\}', raw, re.DOTALL)
+            inc_data = json.loads(m.group()) if m else {}
+            short_desc = inc_data.get("short_description") or question[:100]
+            description = inc_data.get("description") or question
+            urgency     = int(inc_data.get("urgency", 2))
+            urgency_label = {1: "Critical", 2: "High", 3: "Medium"}.get(urgency, "High")
+
+            inc_number, inc_url = create_snow_incident(short_desc, description, urgency=urgency)
+            reply = (
+                f"✅ Incident **{inc_number}** raised in ServiceNow\n\n"
+                f"**Summary:** {short_desc}\n"
+                f"**Priority:** {urgency_label}\n"
+                f"**View:** {inc_url}"
+            )
+            log.info(f"[CHAT] SNOW incident created {inc_number} — {round(time.perf_counter()-t0,3)}s")
+        except Exception as e:
+            log.error(f"[CHAT] SNOW create failed: {e}")
+            reply = f"Failed to create ServiceNow incident: {e}"
+
+    elif MODEL_PROVIDER in _LOCAL_PROVIDERS:
+        _FAILED_KW = re.compile(
+            r'\b(fail|failed|failing|error|recent|job|jobs|backup|yesterday|today|last\s*24)\b',
+            re.IGNORECASE
+        )
+        if _FAILED_KW.search(question):
+            raw_sql = call_llm(question, load_sql_prompt(), max_tokens=200)
+            sql = re.sub(r"```sql|```", "", raw_sql or "").strip()
+            # Extract only the SELECT statement — stop at first semicolon to drop any trailing explanation
+            m = re.search(r"(SELECT\b[^;]+;?)", sql, re.IGNORECASE | re.DOTALL)
+            sql = m.group(1).strip() if m else ""
+            if sql:
+                # Safety net: if LLM omits date filter on failed_jobs_daily, inject it
+                if re.search(r'failed_jobs_daily', sql, re.IGNORECASE) and \
+                   not re.search(r'backup_date\s*[><=!]', sql, re.IGNORECASE):
+                    if re.search(r'\bWHERE\b', sql, re.IGNORECASE):
+                        sql = re.sub(r'\bWHERE\b', 'WHERE backup_date >= CURRENT_DATE - 1 AND ',
+                                     sql, count=1, flags=re.IGNORECASE)
+                    elif re.search(r'\bORDER BY\b', sql, re.IGNORECASE):
+                        sql = re.sub(r'\bORDER BY\b', 'WHERE backup_date >= CURRENT_DATE - 1 ORDER BY ',
+                                     sql, count=1, flags=re.IGNORECASE)
+                    else:
+                        sql = sql.rstrip(';') + ' WHERE backup_date >= CURRENT_DATE - 1'
+                    log.info(f"[LOCAL] injected missing date filter into query")
+                rows = run_query(sql)
+                reply = _format_rows(question, rows) if rows else "No failed jobs found for that period."
+            else:
+                reply = "⚠️ Could not generate query. Switch to Groq or OpenRouter for better results."
+            log.info(f"[CHAT] local failed-jobs done — {round(time.perf_counter()-t0,3)}s")
+        else:
+            reply = "This query works better on a cloud model. Switch to **Groq** or **OpenRouter** using the Provider dropdown above for full analysis."
+            log.info(f"[CHAT] local — non-failed query, returning static reply")
+
+    else:
+        # Cloud providers: full SQL generation + LLM explain
+        sql_user = (
+            "Generate a PostgreSQL SELECT query to answer this question:\n"
+            + question + "\n"
+            "If NOT a data question, reply DIRECT: followed by a short answer.\n"
+            "Otherwise SQL only. No markdown."
+        )
+        raw_sql = call_llm(sql_user, load_sql_prompt(), max_tokens=300)
+        sql_clean = re.sub(r"```sql|```", "", raw_sql).strip()
+        if sql_clean.upper().startswith("DIRECT:"):
+            reply = sql_clean[7:].strip()
+            log.info(f"[CHAT] DIRECT answer — {round(time.perf_counter()-t0,3)}s")
 
         if not reply and not raw_sql:
             reply = "The AI did not return a response. Please try again."
             log.warning("[CHAT] LLM returned None/empty for SQL generation")
 
         if not reply:
-            # Strip markdown fences and extract the SELECT statement
             sql = re.sub(r"```sql|```", "", raw_sql).strip()
             if not sql.upper().startswith("SELECT"):
                 m = re.search(r"(SELECT\b.+)", sql, re.IGNORECASE | re.DOTALL)
@@ -457,21 +651,24 @@ def process_question(question):
             if any(w in sql.lower() for w in forbidden):
                 log.warning(f"[CHAT] blocked write SQL attempt — {sql[:80]}")
                 reply = "I can only read backup data. Write operations are not allowed."
-
             else:
                 rows = run_query(sql)
                 if not rows:
                     log.info(f"[CHAT] query returned 0 rows — {round(time.perf_counter()-t0,3)}s")
                     reply = "I checked the database and there's nothing to report here — either everything looks clean or this data isn't available. You might want to check with your Backup Administrator."
-
-                elif MODEL_PROVIDER in _LOCAL_PROVIDERS:
-                    reply = _format_rows(question, rows)
-                    log.info(f"[CHAT] local format done rows={len(rows)} — {round(time.perf_counter()-t0,3)}s")
-
                 else:
+                    past_fix = ""
+                    for row in rows[:5]:
+                        err = row.get("failure_message", "")
+                        if err:
+                            match = _find_past_resolution(err)
+                            if match:
+                                past_fix = match
+                                break
                     explain_prompt = (
                         "[QUERY RESULTS]\n" + sql + "\n" + str(rows[:50])
                         + "\n\n[USER QUESTION]\n" + question
+                        + ("\n\n" + past_fix if past_fix else "")
                         + "\n\nReply in a helpful, conversational tone — like a knowledgeable colleague, "
                         "not a formal report. Lead with the key finding, use bullet points for lists, "
                         "bold the most important names and numbers with **text**, and suggest a clear "
@@ -493,9 +690,11 @@ def _filter_dt(value):
     return str(value)[:16] if value else ''
 
 
-def generate_health_email(failed_24h, critical_repos, incomplete_jobs, remarks=None):
+def generate_health_email(failed_24h, critical_repos, long_running, zero_data, remarks=None):
+    if not isinstance(remarks, dict):
+        remarks = {}
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    has_issues = bool(failed_24h or critical_repos or incomplete_jobs)
+    has_issues = bool(failed_24h or critical_repos or long_running or zero_data)
     return render_template(
         'health_email.html',
         ts=ts,
@@ -503,17 +702,20 @@ def generate_health_email(failed_24h, critical_repos, incomplete_jobs, remarks=N
         overall_bg="#DC2626" if has_issues else "#16A34A",
         f_cls="red"    if failed_24h    else "green",
         r_cls="red"    if critical_repos else "green",
-        j_cls="yellow" if incomplete_jobs else "green",
+        l_cls="yellow" if long_running   else "green",
+        z_cls="yellow" if zero_data      else "green",
         failed_24h=failed_24h,
         critical_repos=critical_repos,
-        incomplete_jobs=incomplete_jobs,
-        remarks=remarks or [],
+        long_running=long_running,
+        zero_data=zero_data,
+        remarks=remarks,
     )
 
 
 def _fetch_health_data():
     failed_24h = run_query("""
-        SELECT MAX(backup_date) AS backup_date, vbr_server, job_name, failed_object_name
+        SELECT MAX(backup_date) AS backup_date, vbr_server, job_name, failed_object_name,
+               MAX(failure_message) AS failure_message
         FROM failed_jobs_daily
         WHERE backup_date >= CURRENT_DATE - INTERVAL '1 day'
         GROUP BY vbr_server, job_name, failed_object_name
@@ -526,15 +728,20 @@ def _fetch_health_data():
         WHERE used_pct >= 90
         ORDER BY used_pct DESC
     """)
-    incomplete_jobs = run_query("""
-        SELECT job_name, backup_type, vbr_server,
-               start_time, end_time, duration_minutes, status, failure_message
-        FROM job_sessions
-        WHERE start_time >= NOW() - INTERVAL '24 hours'
-          AND status IN ('Failed', 'Warning')
-        ORDER BY status DESC, start_time DESC
+    long_running = run_query("""
+        SELECT job_name, backup_type, vbr_server, start_time, duration_hours, alert_level
+        FROM long_running_jobs
+        ORDER BY duration_hours DESC
+        LIMIT 10
     """)
-    return failed_24h, critical_repos, incomplete_jobs
+    zero_data = run_query("""
+        SELECT backup_date, job_name, vbr_server, vm_name, read_mb, transferred_kb, vm_start_time
+        FROM zero_size_jobs
+        WHERE backup_date >= CURRENT_DATE - 7
+        ORDER BY vm_start_time DESC
+        LIMIT 20
+    """)
+    return failed_24h, critical_repos, long_running, zero_data
 
 
 # ============================================================
@@ -544,7 +751,7 @@ def _fetch_health_data():
 def _configured_providers():
     """Return providers to show in the UI — controlled by ENABLED_PROVIDERS in config."""
     enabled = {p.strip() for p in os.getenv("ENABLED_PROVIDERS", "groq,openrouter,lmstudio").split(",")}
-    order   = ["groq", "openrouter", "lmstudio", "gemini", "openai", "copilot", "ollama"]
+    order   = ["groq", "openrouter", "lmstudio", "gemini", "openai", "copilot"]
     return [p for p in order if p in enabled]
 
 
@@ -562,11 +769,11 @@ def index():
 @app.route("/switch-provider", methods=["POST"])
 def switch_provider():
     global MODEL_PROVIDER, _SYSTEM_PROMPT, _SQL_PROMPT
-    global GROQ_MODEL, OPENROUTER_MODEL, GEMINI_MODEL, OPENAI_MODEL, COPILOT_MODEL, LMSTUDIO_MODEL, OLLAMA_MODEL
+    global GROQ_MODEL, OPENROUTER_MODEL, GEMINI_MODEL, OPENAI_MODEL, COPILOT_MODEL, LMSTUDIO_MODEL
     data = request.get_json()
     provider = data.get("provider", "").strip().lower()
     model    = data.get("model",    "").strip()
-    valid = {"groq", "openrouter", "gemini", "openai", "copilot", "lmstudio", "ollama"}
+    valid = {"groq", "openrouter", "gemini", "openai", "copilot", "lmstudio"}
     if provider not in valid:
         return jsonify({"error": f"Unknown provider: {provider}"}), 400
 
@@ -582,7 +789,7 @@ def switch_provider():
         elif provider == "openai":     OPENAI_MODEL     = model
         elif provider == "copilot":    COPILOT_MODEL    = model
         elif provider == "lmstudio":   LMSTUDIO_MODEL   = model
-        elif provider == "ollama":     OLLAMA_MODEL     = model
+
 
     if provider in _LOCAL_PROVIDERS:
         _SYSTEM_PROMPT = _load_file("system_prompt_local.txt", "You are a Veeam backup assistant. Explain the results clearly.")
@@ -596,6 +803,43 @@ def switch_provider():
     return jsonify({"success": True, "provider": provider, "model": active})
 
 
+@app.route("/ping-provider", methods=["POST"])
+def ping_provider():
+    """Quick connectivity test for local providers (lmstudio)."""
+    data     = request.get_json()
+    provider = data.get("provider", MODEL_PROVIDER).strip().lower()
+    model    = data.get("model", _get_active_model()).strip()
+
+    url_map = {
+        "lmstudio": LMSTUDIO_URL,
+    }
+    url = url_map.get(provider)
+    if not url:
+        return jsonify({"error": f"Ping only supported for local providers (lmstudio), got: {provider}"}), 400
+
+    payload = {
+        "model":       model,
+        "messages":    [{"role": "user", "content": "hi"}],
+        "max_tokens":  5,
+        "temperature": 0,
+    }
+    try:
+        import requests as _req
+        t0 = time.perf_counter()
+        r = _req.post(url, json=payload, timeout=90)
+        ms = round((time.perf_counter() - t0) * 1000)
+        if r.status_code == 200:
+            log.info(f"[PING] {provider}/{model} OK {ms}ms")
+            return jsonify({"ok": True, "ms": ms, "model": model})
+        else:
+            body = r.text[:200]
+            log.warning(f"[PING] {provider} HTTP {r.status_code}: {body}")
+            return jsonify({"ok": False, "error": f"HTTP {r.status_code}: {body}"}), 200
+    except Exception as e:
+        log.warning(f"[PING] {provider} failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 200
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json()
@@ -603,11 +847,141 @@ def chat():
     if not question:
         return jsonify({"answer": "Please ask a question."})
     try:
-        answer = process_question(question)
-        return jsonify({"answer": answer})
+        result = process_question(question)
+        if isinstance(result, dict):
+            return jsonify(result)
+        return jsonify({"answer": result})
     except Exception as e:
         log.error(f"[ROUTE /chat] error={e}")
         return jsonify({"answer": "Error: " + str(e)})
+
+
+@app.route("/create-incident", methods=["POST"])
+def create_incident_route():
+    data        = request.get_json()
+    short_desc  = data.get("short_description", data.get("description", "")).strip()[:100]
+    description = data.get("description", short_desc).strip()
+    urgency     = int(data.get("urgency", 2))
+    if not short_desc:
+        return jsonify({"error": "Short description required"}), 400
+    urgency_label = {1: "Critical", 2: "High", 3: "Medium"}.get(urgency, "High")
+    log.info(f"[ROUTE /create-incident] short_desc={short_desc!r} urgency={urgency}")
+    try:
+        inc_number, inc_url = create_snow_incident(short_desc, description, urgency=urgency)
+        return jsonify({"success": True, "message": f"✅ Incident **{inc_number}** created in ServiceNow.\n\n**Summary:** {short_desc}\n**Priority:** {urgency_label}\n**View:** {inc_url}"})
+    except Exception as e:
+        log.error(f"[ROUTE /create-incident] error={e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/list-incidents")
+def list_incidents_route():
+    from requests.auth import HTTPBasicAuth
+    if not SNOW_INSTANCE or not SNOW_USER:
+        return jsonify({"error": "ServiceNow not configured"}), 400
+    try:
+        r = requests.get(
+            f"{SNOW_INSTANCE}/api/now/table/incident",
+            auth=HTTPBasicAuth(SNOW_USER, SNOW_PASS),
+            headers={"Accept": "application/json"},
+            params={
+                "sysparm_fields":        "number,short_description,description,state,urgency,opened_at,assigned_to",
+                "sysparm_query":         f"caller_id.user_name={SNOW_USER}^state!=6^state!=7",
+                "sysparm_display_value": "true",
+                "sysparm_limit":         20,
+                "sysparm_orderby":       "opened_at^DESC",
+            },
+            timeout=30
+        )
+        if not r.ok:
+            return jsonify({"error": f"SNOW error {r.status_code}"}), 500
+        items = []
+        for rec in r.json().get("result", []):
+            items.append({
+                "number":      rec.get("number",""),
+                "summary":     rec.get("short_description",""),
+                "description": rec.get("description",""),
+                "state":       rec.get("state",""),
+                "urgency":     rec.get("urgency",""),
+                "assigned_to": rec.get("assigned_to") or "Unassigned",
+                "opened_at":   str(rec.get("opened_at",""))[:16],
+            })
+        log.info(f"[ROUTE /list-incidents] returned {len(items)} incidents")
+        return jsonify({"incidents": items})
+    except Exception as e:
+        log.error(f"[ROUTE /list-incidents] error={e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/get-incident")
+def get_incident_route():
+    from requests.auth import HTTPBasicAuth
+    if not SNOW_INSTANCE or not SNOW_USER:
+        return jsonify({"error": "ServiceNow not configured"}), 400
+    inc_number = request.args.get("number", "").strip().upper()
+    if not inc_number:
+        return jsonify({"error": "Incident number required"}), 400
+    try:
+        r = requests.get(
+            f"{SNOW_INSTANCE}/api/now/table/incident",
+            auth=HTTPBasicAuth(SNOW_USER, SNOW_PASS),
+            headers={"Accept": "application/json"},
+            params={
+                "sysparm_query":         f"number={inc_number}",
+                "sysparm_fields":        "number,short_description,description,state,urgency,priority,assigned_to,assignment_group,opened_at,resolved_at,close_notes,caller_id",
+                "sysparm_display_value": "true",
+                "sysparm_limit":         1,
+            },
+            timeout=30
+        )
+        if not r.ok:
+            return jsonify({"error": f"SNOW error {r.status_code}"}), 500
+        results = r.json().get("result", [])
+        if not results:
+            return jsonify({"error": f"{inc_number} not found in ServiceNow"}), 404
+        rec = results[0]
+        log.info(f"[ROUTE /get-incident] fetched {inc_number}")
+        return jsonify({"incident": {
+            "number":           rec.get("number", ""),
+            "summary":          rec.get("short_description", ""),
+            "description":      rec.get("description", ""),
+            "state":            rec.get("state", ""),
+            "urgency":          rec.get("urgency", ""),
+            "priority":         rec.get("priority", ""),
+            "assigned_to":      rec.get("assigned_to") or "Unassigned",
+            "assignment_group": rec.get("assignment_group") or "—",
+            "opened_at":        str(rec.get("opened_at", ""))[:16],
+            "resolved_at":      str(rec.get("resolved_at", ""))[:16],
+            "close_notes":      rec.get("close_notes", ""),
+        }})
+    except Exception as e:
+        log.error(f"[ROUTE /get-incident] error={e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/resolve-incident", methods=["POST"])
+def resolve_incident_route():
+    data = request.get_json()
+    inc_number      = data.get("inc_number", "").strip().upper()
+    resolution_code  = data.get("resolution_code", "Solved (Permanently)").strip()
+    resolution_notes = data.get("resolution_notes", "").strip()
+    if not inc_number:
+        return jsonify({"error": "Incident number required"}), 400
+    if not resolution_notes:
+        return jsonify({"error": "Resolution notes are required"}), 400
+    log.info(f"[ROUTE /resolve-incident] {inc_number} code={resolution_code!r}")
+    try:
+        inc_number, description = resolve_snow_incident(inc_number, resolution_code, resolution_notes)
+        _TEST_KEYWORDS = ("test im", "test incident", "test only", "testing", "ignore", "dummy", "fake")
+        is_test = any(kw in resolution_notes.lower() for kw in _TEST_KEYWORDS)
+        if not is_test:
+            _log_incident_resolution(description or inc_number, resolution_notes)
+        else:
+            log.info(f"[ROUTE /resolve-incident] skipping log — test resolution for {inc_number}")
+        return jsonify({"success": True, "message": f"✅ Incident **{inc_number}** resolved successfully in ServiceNow."})
+    except Exception as e:
+        log.error(f"[ROUTE /resolve-incident] error={e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/healthcheck")
@@ -615,15 +989,16 @@ def healthcheck():
     log.info("[ROUTE /healthcheck] generating health report")
     t0 = time.perf_counter()
     try:
-        failed_24h, critical_repos, incomplete_jobs = _fetch_health_data()
-        log.info(f"[ROUTE /healthcheck] failed={len(failed_24h)} repos={len(critical_repos)} jobs={len(incomplete_jobs)} remarks={len(_remarks)} — {round(time.perf_counter()-t0,3)}s")
+        failed_24h, critical_repos, long_running, zero_data = _fetch_health_data()
+        log.info(f"[ROUTE /healthcheck] failed={len(failed_24h)} repos={len(critical_repos)} long={len(long_running)} zero={len(zero_data)} remarks={len(_remarks)} — {round(time.perf_counter()-t0,3)}s")
         return jsonify({
-            "email_html": generate_health_email(failed_24h, critical_repos, incomplete_jobs, list(_remarks)),
+            "email_html": generate_health_email(failed_24h, critical_repos, long_running, zero_data, dict(_remarks)),
             "counts": {
-                "failed": len(failed_24h),
-                "repos":  len(critical_repos),
-                "jobs":   len(incomplete_jobs),
-                "remarks": len(_remarks)
+                "failed":      len(failed_24h),
+                "repos":       len(critical_repos),
+                "long_running": len(long_running),
+                "zero_data":   len(zero_data),
+                "remarks":     len(_remarks)
             }
         })
     except Exception as e:
@@ -631,125 +1006,44 @@ def healthcheck():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/add-remark", methods=["POST"])
-def add_remark():
-    data = request.get_json()
-    instruction = data.get("instruction", "").strip()
-    if not instruction:
-        return jsonify({"error": "No instruction provided"}), 400
-    log.info(f"[ROUTE /add-remark] instruction={instruction!r}")
+@app.route("/failed-jobs-list")
+def failed_jobs_list():
     try:
-        parse_prompt = (
-            'You are a Veeam backup admin assistant parsing an engineer\'s action update.\n'
-            f'The update may mention ONE or MULTIPLE jobs/actions. Extract ALL of them.\n'
-            f'Input: "{instruction}"\n\n'
-            'Return a JSON ARRAY — one object per job/action mentioned. Example:\n'
-            '[\n'
-            '  {"job_name": "Prod_VM_Job", "vbr_server": "VBR1 or Unknown", "vm_object": "VM name or Unknown",\n'
-            '   "action": "Backup Retry", "status": "Running",\n'
-            '   "note": "Backup retry initiated, job currently running"},\n'
-            '  {"job_name": "Linux_VM_Job", "vbr_server": "VBR2 or Unknown", "vm_object": "Unknown",\n'
-            '   "action": "Backup Retry", "status": "Completed",\n'
-            '   "note": "Backup retry completed successfully"}\n'
-            ']\n\n'
-            'Status rules:\n'
-            '- completed/success/fixed/resolved → Completed\n'
-            '- running/retried/retry/running now → Running\n'
-            '- case raised/ticket/INC/troubleshoot/investigating → Case Raised\n'
-            '- will/scheduled/planned/monitor → Pending\n'
-            'Return JSON array only. No explanation.'
-        )
-        raw = call_llm(parse_prompt, "Extract structured data. Return only a JSON array.", max_tokens=400)
-
-        # Try array first, fallback to single object
-        arr_match = re.search(r'\[.*?\]', raw, re.DOTALL)
-        if arr_match:
-            parsed = json.loads(arr_match.group())
-            if isinstance(parsed, dict):
-                parsed = [parsed]
-        else:
-            obj_match = re.search(r'\{[^{}]+\}', raw, re.DOTALL)
-            if not obj_match:
-                return jsonify({"error": "Could not parse remarks from instruction"}), 400
-            parsed = [json.loads(obj_match.group())]
-
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        new_remarks = []
-        for r in parsed:
-            r["timestamp"] = ts
-            _remarks.append(r)
-            new_remarks.append(r)
-        _save_remarks(_remarks)
-        log.info(f"[ROUTE /add-remark] added {len(new_remarks)} remark(s), total={len(_remarks)}")
-
-        failed_24h, critical_repos, incomplete_jobs = _fetch_health_data()
-        email_html = generate_health_email(failed_24h, critical_repos, incomplete_jobs, list(_remarks))
-
-        lines = []
-        for r in new_remarks:
-            job  = r.get('job_name', 'Unknown')
-            vbr  = r.get('vbr_server', '')
-            act  = r.get('action', '')
-            stat = r.get('status', '')
-            ctx  = job + (f" ({vbr})" if vbr and vbr != 'Unknown' else "")
-            lines.append(f"- **{ctx}** — {act} [{stat}]")
-
-        summary = "\n".join(lines)
-        count = len(new_remarks)
-        msg = f"Logged {count} remark{'s' if count > 1 else ''}:\n{summary}\n\nReport updated. Send when ready."
-        return jsonify({
-            "html": email_html,
-            "remark": new_remarks[0],
-            "message": msg
-        })
+        failed_24h, _, _, _ = _fetch_health_data()
+        jobs = []
+        for r in failed_24h[:60]:
+            vm_key  = f"{r['vbr_server']}|{r['job_name']}|{r['failed_object_name']}"
+            job_key = f"JOB|{r['vbr_server']}|{r['job_name']}"
+            jobs.append({
+                "key":         vm_key,
+                "job_key":     job_key,
+                "backup_date": str(r.get("backup_date", "")),
+                "vbr_server":  r.get("vbr_server", ""),
+                "job_name":    r.get("job_name", ""),
+                "object":      r.get("failed_object_name", ""),
+                "remark":      _remarks.get(vm_key, ""),
+                "job_remark":  _remarks.get(job_key, ""),
+            })
+        return jsonify({"jobs": jobs})
     except Exception as e:
-        log.error(f"[ROUTE /add-remark] error={e}")
+        log.error(f"[ROUTE /failed-jobs-list] error={e}")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/remove-remark", methods=["POST"])
-def remove_remark():
+@app.route("/set-remarks", methods=["POST"])
+def set_remarks():
     data = request.get_json()
-    instruction = data.get("instruction", "").strip()
-    if not instruction:
-        return jsonify({"error": "No instruction provided"}), 400
-    if not _remarks:
-        return jsonify({"error": "No remarks to remove."}), 400
-    log.info(f"[ROUTE /remove-remark] instruction={instruction!r}")
-    try:
-        # Ask LLM to identify which remark to remove
-        list_str = "\n".join(
-            f"{i}: job={r.get('job_name','?')} vm={r.get('vm_object','?')} action={r.get('action','?')} status={r.get('status','?')} time={r.get('timestamp','?')}"
-            for i, r in enumerate(_remarks)
-        )
-        parse_prompt = (
-            f'The engineer wants to remove one remark. Their instruction: "{instruction}"\n\n'
-            f'Current remarks (index: details):\n{list_str}\n\n'
-            'Return ONLY the integer index of the remark to remove. Nothing else.'
-        )
-        raw = call_llm(parse_prompt, "Return only a single integer index.", max_tokens=10)
-        idx_match = re.search(r'\d+', raw.strip())
-        if not idx_match:
-            return jsonify({"error": "Could not identify which remark to remove."}), 400
-        idx = int(idx_match.group())
-        if idx < 0 or idx >= len(_remarks):
-            return jsonify({"error": f"Remark index {idx} out of range."}), 400
-
-        removed = _remarks.pop(idx)
-        _save_remarks(_remarks)
-        log.info(f"[ROUTE /remove-remark] removed idx={idx} job={removed.get('job_name','?')} remaining={len(_remarks)}")
-        failed_24h, critical_repos, incomplete_jobs = _fetch_health_data()
-        email_html = generate_health_email(failed_24h, critical_repos, incomplete_jobs, list(_remarks))
-        job = removed.get('job_name', 'Unknown')
-        obj = removed.get('vm_object', '')
-        ctx = job + (f" / {obj}" if obj and obj != 'Unknown' else "")
-        return jsonify({
-            "html": email_html,
-            "message": f"Removed remark for **{ctx}**. {len(_remarks)} remark(s) remaining."
-        })
-    except Exception as e:
-        log.error(f"[ROUTE /remove-remark] error={e}")
-        return jsonify({"error": str(e)}), 500
+    new = data.get("remarks", {})
+    for k, v in new.items():
+        if v.strip():
+            _remarks[k] = v.strip()
+        elif k in _remarks:
+            del _remarks[k]
+    _save_remarks(_remarks)
+    log.info(f"[ROUTE /set-remarks] total={len(_remarks)} remarks")
+    failed_24h, critical_repos, long_running, zero_data = _fetch_health_data()
+    email_html = generate_health_email(failed_24h, critical_repos, long_running, zero_data, dict(_remarks))
+    return jsonify({"success": True, "html": email_html, "count": len(_remarks)})
 
 
 @app.route("/clear-remarks", methods=["POST"])
@@ -758,7 +1052,9 @@ def clear_remarks():
     _remarks.clear()
     _save_remarks(_remarks)
     log.info(f"[ROUTE /clear-remarks] cleared {count} remark(s)")
-    return jsonify({"success": True, "message": "All remarks cleared."})
+    failed_24h, critical_repos, long_running, zero_data = _fetch_health_data()
+    email_html = generate_health_email(failed_24h, critical_repos, long_running, zero_data, {})
+    return jsonify({"success": True, "html": email_html, "message": "All remarks cleared."})
 
 
 @app.route("/send-healthcheck", methods=["POST"])

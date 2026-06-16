@@ -54,9 +54,13 @@
       <div class="stat-n {{ r_cls }}">{{ critical_repos | length }}</div>
       <div class="stat-l">Repositories<br>Above 90%</div>
     </div>
-    <div class="stat {{ j_cls }}">
-      <div class="stat-n {{ j_cls }}">{{ incomplete_jobs | length }}</div>
-      <div class="stat-l">Incomplete Jobs<br>Last 24 Hours</div>
+    <div class="stat {{ l_cls }}">
+      <div class="stat-n {{ l_cls }}">{{ long_running | length }}</div>
+      <div class="stat-l">Long Running<br>Jobs</div>
+    </div>
+    <div class="stat {{ z_cls }}">
+      <div class="stat-n {{ z_cls }}">{{ zero_data | length }}</div>
+      <div class="stat-l">Zero Data<br>Alerts</div>
     </div>
   </div>
 
@@ -66,13 +70,17 @@
     <h2 class="h-red">&#x1F534; Failed Backups &ndash; Last 24 Hours
       &nbsp;<span class="cnt red">{{ failed_24h | length }}</span></h2>
     <table>
-      <tr><th>Date</th><th>VM / Object</th><th>Job Name</th><th>Server</th></tr>
+      <tr><th>Date</th><th>VM / Object</th><th>Job Name</th><th>Server</th><th>Engineer Remark</th></tr>
       {% for r in failed_24h[:60] %}
+      {% set vm_key  = r.vbr_server + '|' + r.job_name + '|' + r.failed_object_name %}
+      {% set job_key = 'JOB|' + r.vbr_server + '|' + r.job_name %}
+      {% set rm_val  = (remarks.get(vm_key) or remarks.get(job_key, '')) if (remarks is mapping) else '' %}
       <tr>
         <td>{{ r.backup_date }}</td>
         <td><b>{{ r.failed_object_name }}</b></td>
         <td>{{ r.job_name }}</td>
         <td>{{ r.vbr_server }}</td>
+        <td>{% if rm_val %}<span class="badge-blue">{{ rm_val }}</span>{% else %}<span style="color:#d1d5db">—</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </table>
@@ -114,76 +122,65 @@
   </div>
   {% endif %}
 
-  {# ── Incomplete jobs ── #}
-  {% if incomplete_jobs %}
+  {# ── Long running jobs ── #}
+  {% if long_running %}
   <div class="section">
-    <h2 class="h-yellow">&#x23F0; Incomplete Jobs &ndash; Last 24 Hours
-      &nbsp;<span class="cnt yellow">{{ incomplete_jobs | length }}</span></h2>
+    <h2 class="h-yellow">&#x23F1;&#xFE0F; Max Duration Jobs
+      &nbsp;<span class="cnt yellow">{{ long_running | length }}</span></h2>
     <table>
-      <tr><th>Job Name</th><th>Server</th><th>Start Time</th><th>Duration</th><th>Status</th><th>Message</th></tr>
-      {% for r in incomplete_jobs[:30] %}
+      <tr><th>Job Name</th><th>Type</th><th>Server</th><th>Start Time</th><th>Duration</th><th>Alert</th></tr>
+      {% for r in long_running %}
       <tr>
         <td><b>{{ r.job_name }}</b></td>
+        <td>{{ r.backup_type }}</td>
         <td>{{ r.vbr_server }}</td>
         <td>{{ r.start_time | dt }}</td>
-        <td>{% if r.duration_minutes %}{{ r.duration_minutes | int }} min{% else %}N/A{% endif %}</td>
+        <td><b>{{ r.duration_hours | round(1) }} hrs</b></td>
         <td>
-          <span class="{{ 'badge-red' if r.status == 'Failed' else 'badge-yellow' }}">
-            {{ r.status }}
+          <span class="{{ 'badge-red' if r.alert_level == 'Critical' else 'badge-yellow' }}">
+            {{ r.alert_level }}
           </span>
         </td>
-        <td class="msg">{{ (r.failure_message or '')[:80] }}</td>
       </tr>
       {% endfor %}
     </table>
   </div>
   {% else %}
   <div class="section">
-    <h2 class="h-green">&#x2705; Job Completion &ndash; Last 24 Hours</h2>
-    <p class="ok">All jobs completed successfully in the last 24 hours.</p>
+    <h2 class="h-green">&#x2705; Max Duration Jobs</h2>
+    <p class="ok">No long-running job alerts.</p>
   </div>
   {% endif %}
 
-  {# ── Remarks & Action Items ── #}
-  {% if remarks %}
+  {# ── Zero data alerts ── #}
+  {% if zero_data %}
   <div class="section">
-    <h2 class="h-blue">&#x1F4DD; Engineer Action Items
-      &nbsp;<span class="cnt blue">{{ remarks | length }}</span></h2>
+    <h2 class="h-yellow">&#x26A0;&#xFE0F; Zero Data Alerts &ndash; Last 7 Days
+      &nbsp;<span class="cnt yellow">{{ zero_data | length }}</span></h2>
     <table>
-      <tr><th>Job Name</th><th>VBR Server</th><th>VM / Object</th><th>Action</th><th>Status</th><th>Notes</th><th>Time</th></tr>
-      {% for r in remarks %}
+      <tr><th>Date</th><th>Job Name</th><th>Server</th><th>VM / Object</th><th>Read (MB)</th><th>Transferred (KB)</th></tr>
+      {% for r in zero_data %}
       <tr>
-        <td><b>{{ r.job_name if r.job_name and r.job_name != 'Unknown' else '—' }}</b></td>
-        <td>{{ r.vbr_server if r.vbr_server and r.vbr_server != 'Unknown' else '—' }}</td>
-        <td>{{ r.vm_object if r.vm_object and r.vm_object != 'Unknown' else '—' }}</td>
-        <td>{{ r.action }}</td>
-        <td>
-          {% set s = r.status %}
-          {% if s == 'Completed' %}
-            <span class="badge-green">&#x2705; {{ s }}</span>
-          {% elif s == 'Running' %}
-            <span class="badge-blue">&#x1F504; {{ s }}</span>
-          {% elif s == 'Case Raised' %}
-            <span class="badge-yellow">&#x1F4CB; {{ s }}</span>
-          {% elif s == 'In Progress' %}
-            <span class="badge-yellow">&#x23F3; {{ s }}</span>
-          {% elif s == 'Monitoring' %}
-            <span class="badge-blue">&#x1F50D; {{ s }}</span>
-          {% else %}
-            <span class="badge-red">&#x23F8;&#xFE0F; {{ s }}</span>
-          {% endif %}
-        </td>
-        <td>{{ r.note }}</td>
-        <td style="white-space:nowrap;color:#9CA3AF;font-size:11px">{{ r.timestamp }}</td>
+        <td>{{ r.backup_date }}</td>
+        <td><b>{{ r.job_name }}</b></td>
+        <td>{{ r.vbr_server }}</td>
+        <td>{{ r.vm_name }}</td>
+        <td>{{ r.read_mb | round(1) }}</td>
+        <td>{{ r.transferred_kb | round(1) }}</td>
       </tr>
       {% endfor %}
     </table>
+  </div>
+  {% else %}
+  <div class="section">
+    <h2 class="h-green">&#x2705; Zero Data Alerts</h2>
+    <p class="ok">No zero-data backup sessions in the last 7 days.</p>
   </div>
   {% endif %}
 
   <div class="footer">
     BackupPulse &nbsp;&middot;&nbsp; Veeam Backup AI Assistant &nbsp;&middot;&nbsp; {{ ts }}
-    {% if remarks %}&nbsp;&middot;&nbsp; {{ remarks | length }} action item(s) recorded{% endif %}
+    {% if remarks %}&nbsp;&middot;&nbsp; {{ remarks | length }} remark(s) added{% endif %}
   </div>
 
 </div>

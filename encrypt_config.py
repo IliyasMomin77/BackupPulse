@@ -12,7 +12,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config_final.env')
 SENSITIVE = {
     'GROQ_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY',
     'COPILOT_API_KEY', 'OPENROUTER_API_KEY', 'CLAUDE_API_KEY',
-    'DB_PASSWORD', 'DB_SETUP_PASSWORD', 'SMTP_PASS',
+    'DB_PASSWORD', 'DB_SETUP_PASSWORD', "SNOW_PASS", "SMTP_PASS",
 }
 
 # Generate key if not present

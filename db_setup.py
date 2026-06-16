@@ -2,7 +2,11 @@
 db_setup.py — Seed demo data
 40 protected objects: 30 VM, 8 Agent, 2 File Backup
 VBR servers: VBR1, VBR2, VBR3
-4 failing objects: WApp03, LApp02, WAgt03, NAS-SRV01
+Failures:
+  Prod_VM_Job   (VBR1): WApp03, WApp04, WApp05  — same CBT error
+  Linux_VM_Job  (VBR2): LApp02, LApp03           — same VSS error
+  Prod_Agent_Job(VBR1): WAgt03, WAgt04            — same agent conn error
+  Prod_File_Job (VBR3): NAS-SRV01                — access denied
 """
 
 import psycopg2
@@ -73,8 +77,30 @@ FILES = ["NAS-SRV01", "NFS-SRV01"]  # 2 total
 
 ALL_OBJECTS = VMS + AGENTS + FILES   # 40 total
 
-# Exactly 4 bad objects: 2 VM, 1 Agent, 1 File
-BAD_OBJECTS = ["WApp03", "LApp02", "WAgt03", "NAS-SRV01"]
+# Per-job failures: multiple objects share the same root-cause error
+JOB_FAILURES = {
+    "Prod_VM_Job": {
+        "objects": ["WApp03", "WApp04", "WApp05"],
+        "error":   "CBT data is invalid, failing over to legacy incremental backup. Please reset CBT on the VM.",
+    },
+    "Linux_VM_Job": {
+        "objects": ["LApp02", "LApp03"],
+        "error":   "VSS error: VSS_E_SNAPSHOT_SET_IN_PROGRESS. Code: 0x80042316. Another snapshot operation is in progress.",
+    },
+    "Prod_Agent_Job": {
+        "objects": ["WAgt03", "WAgt04"],
+        "error":   "Failed to establish connection: the Veeam Agent service is unavailable on the target machine.",
+    },
+    "Prod_File_Job": {
+        "objects": ["NAS-SRV01"],
+        "error":   "Access is denied. Your organization's security policies block unauthenticated guest access to this shared folder.",
+    },
+}
+
+# Flat lists derived from JOB_FAILURES
+BAD_OBJECTS   = [o for f in JOB_FAILURES.values() for o in f["objects"]]
+BAD_OBJ_ERROR = {o: f["error"] for f in JOB_FAILURES.values() for o in f["objects"]}
+JOB_ERR_MSG   = {jname: f["error"] for jname, f in JOB_FAILURES.items()}
 
 # ── Job definitions ────────────────────────────────────────────────────────────
 WIN_VMS   = [v for v in VMS if v.startswith(("WApp","WWeb","WSQL","WDB"))]
@@ -98,26 +124,35 @@ for (jname, objs, btype, vbr, dur, sz) in JOB_DEFS:
 
 # ── Failure messages ───────────────────────────────────────────────────────────
 VM_FAIL_MSGS = [
-    "Virtual Machine is unavailable. Check VMware connectivity.",
-    "Unable to connect to guest OS. VMware Tools not running.",
-    "Storage snapshot creation failed.",
-    "CBT reset required — incremental chain broken.",
-    "Quiesce operation failed — application-consistent backup skipped.",
-    "Network connection to backup proxy lost.",
-    "Disk read error on datastore.",
+    "Failed to create VSS snapshot: provider error 0x800423f4. A VSS critical writer has failed.",
+    "VSS error: VSS_E_SNAPSHOT_SET_IN_PROGRESS. Code: 0x80042316. Another snapshot operation is in progress.",
+    "CBT data is invalid, failing over to legacy incremental backup. Please reset CBT on the VM.",
+    "CreateSnapshot failed: timeout 1800000 ms exceeded. Storage may be under heavy load.",
+    "NFC storage connection is unavailable. Check network path between proxy and ESXi host.",
+    "SetVmChangeTracking failed: NoPermissionFault. Check vCenter service account permissions.",
+    "Failed to create NFC download stream. Verify ESXi host is reachable on port 902.",
+    "VM is unavailable and will be skipped from processing. Host may be in maintenance mode.",
+    "The object has been deleted or is no longer accessible in vCenter inventory.",
+    "Failed to finalize guest processing. VMware Tools may not be running or responding.",
 ]
 AGENT_FAIL_MSGS = [
-    "Agent connection timeout. Host unreachable.",
-    "Veeam Agent service not running on target machine.",
-    "Insufficient disk space on agent host.",
-    "Agent credentials rejected. Check service account.",
-    "VSS error during agent backup — retry required.",
+    "Failed to connect to the guest agent. Cannot connect to admin share. Win32 error: The network name cannot be found. Code: 67.",
+    "VSS_WS_FAILED_AT_POST_SNAPSHOT. Application-consistent backup could not be completed.",
+    "There is not enough space on the disk. Failed to write data to the backup file.",
+    "Failed to establish connection: the Veeam Agent service is unavailable on the target machine.",
+    "Failed to prepare guest for SQL Server transaction log backup: target machine actively refused connection.",
+    "Unable to perform application-aware processing: cannot establish connection to the guest OS.",
+    "I/O device error: failed to write data to backup file. Check disk health on agent host.",
+    "Failed to compact full backup file. Agent: Failed to process method {BackupAgent.Compact}.",
 ]
 FILE_FAIL_MSGS = [
-    "File share unavailable. Network path not found.",
-    "Access denied to backup source path.",
-    "File lock timeout — files in use by another process.",
-    "Insufficient repository space for file backup.",
+    "Access is denied. Your organization's security policies block unauthenticated guest access to this shared folder.",
+    "Failed to process NAS backup task: Error: Agent: Failed to process method {NasMaster.SaveSourceBackupMeta}.",
+    "Item is locked by running session [File Backup]. Retry after current session completes.",
+    "SMB 3.0 required. Share is not accessible using the current SMB protocol version.",
+    "Container does not exist or is no longer accessible. Verify the NAS share path and credentials.",
+    "Backing up 0 files and 0 folders (0 B transferred). File share may be empty or path is incorrect.",
+    "Failed to write data to the file. NAS destination repository may have insufficient space.",
 ]
 
 def fail_msg_for(obj):
@@ -154,6 +189,7 @@ CREATE_STATEMENTS = [
         vbr_server          VARCHAR(50),
         job_name            VARCHAR(255),
         failed_object_name  VARCHAR(255),
+        failure_message     TEXT,
         pulled_at           TIMESTAMP DEFAULT NOW()
     )""",
     """CREATE TABLE IF NOT EXISTS job_sessions (
@@ -233,6 +269,11 @@ TABLES = [
 def create_tables(cur):
     for stmt in CREATE_STATEMENTS:
         cur.execute(stmt)
+    # Add new columns to existing tables without dropping data
+    cur.execute("""
+        ALTER TABLE failed_jobs_daily
+        ADD COLUMN IF NOT EXISTS failure_message TEXT
+    """)
 
 def truncate_tables(cur):
     for t in TABLES:
@@ -297,7 +338,7 @@ def insert_job_sessions(cur):
             has_bad = any(o in BAD_OBJECTS for o in objs)
             if has_bad and random.random() < 0.6:
                 status   = random.choice(["Failed", "Warning"])
-                fail_msg = fail_msg_for(next(o for o in objs if o in BAD_OBJECTS))
+                fail_msg = JOB_ERR_MSG.get(jname, fail_msg_for(next(o for o in objs if o in BAD_OBJECTS)))
                 dur     *= random.uniform(0.4, 0.8)
             elif random.random() < 0.04:
                 status, fail_msg = "Warning", "Job completed with warnings."
@@ -331,9 +372,9 @@ def insert_failed_jobs_daily(cur):
                 jname, _, vbr = OBJ_TO_JOB[obj]
                 cur.execute(
                     """INSERT INTO failed_jobs_daily
-                       (backup_date, vbr_server, job_name, failed_object_name)
-                       VALUES (%s,%s,%s,%s)""",
-                    (run_date, vbr, jname, obj),
+                       (backup_date, vbr_server, job_name, failed_object_name, failure_message)
+                       VALUES (%s,%s,%s,%s,%s)""",
+                    (run_date, vbr, jname, obj, BAD_OBJ_ERROR[obj]),
                 )
                 count += 1
         # Occasional random failure from a healthy object
@@ -342,9 +383,9 @@ def insert_failed_jobs_daily(cur):
             jname, _, vbr = OBJ_TO_JOB[obj]
             cur.execute(
                 """INSERT INTO failed_jobs_daily
-                   (backup_date, vbr_server, job_name, failed_object_name)
-                   VALUES (%s,%s,%s,%s)""",
-                (run_date, vbr, jname, obj),
+                   (backup_date, vbr_server, job_name, failed_object_name, failure_message)
+                   VALUES (%s,%s,%s,%s,%s)""",
+                (run_date, vbr, jname, obj, fail_msg_for(obj)),
             )
             count += 1
     print(f"  Failed jobs daily: {count} rows")
@@ -416,7 +457,9 @@ def main():
     print(f"Jobs        : Prod_VM_Job (VBR1), Linux_VM_Job (VBR2),")
     print(f"              Prod_Agent_Job (VBR1), Linux_Agent_Job (VBR2), Prod_File_Job (VBR3)")
     print(f"Objects     : 30 VM + 8 Agent + 2 File = 40 total")
-    print(f"Bad objects : {BAD_OBJECTS}")
+    print(f"Bad objects : {len(BAD_OBJECTS)} total — {BAD_OBJECTS}")
+    for jname, f in JOB_FAILURES.items():
+        print(f"  {jname}: {f['objects']} — same error")
 
     conn = get_conn()
     cur  = conn.cursor()
