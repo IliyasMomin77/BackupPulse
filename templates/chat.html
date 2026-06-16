@@ -32,6 +32,9 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 .snow-dd-item:hover{background:var(--surface2)}
 .model-select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;outline:none;transition:border-color .2s}
 .model-select:focus,.model-select:hover{border-color:var(--accent)}
+.ping-btn{padding:5px 10px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:11px;cursor:pointer;transition:all .18s;white-space:nowrap;display:none}
+.ping-btn:hover{border-color:#38bdf8;color:#38bdf8}
+#ping-result{font-size:11px;white-space:nowrap;display:none}
 .model-label{font-size:11px;color:var(--muted);white-space:nowrap}
 
 .msgs{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px}
@@ -142,6 +145,8 @@ textarea::placeholder{color:var(--muted)}
     <select id="model-select" class="model-select" onchange="switchModel(this.value)">
       <option value="{{ active_model }}">{{ active_model }}</option>
     </select>
+    <button id="ping-btn" class="ping-btn" onclick="pingProvider()" title="Test connection to local model server">&#x1F4E1; Test</button>
+    <span id="ping-result"></span>
     <span class="pulse"></span>
     <button class="health-btn" onclick="healthReport()">&#x1F4CA; Health Report</button>
     <button class="health-btn" onclick="openRemarksModal()" style="background:#1D4ED8" id="remarks-hdr-btn">&#x1F4DD; Remarks</button>
@@ -335,6 +340,7 @@ textarea::placeholder{color:var(--muted)}
 <script>
 const ta=document.getElementById('q'),msgs=document.getElementById('msgs'),btn=document.getElementById('btn');
 let _healthHtml='';
+let _pingGen=0; // incremented each warm-ping so stale ones don't release send
 
 const PROVIDER_MODELS={{ provider_models | tojson }};
 let _currentProvider='{{ provider }}';
@@ -896,6 +902,60 @@ async function submitResolveIM(){
   }
 }
 
+const _LOCAL_PROVIDERS_UI=new Set(['lmstudio']);
+
+function _updatePingVisibility(provider){
+  const btn=document.getElementById('ping-btn');
+  const res=document.getElementById('ping-result');
+  if(_LOCAL_PROVIDERS_UI.has(provider)){
+    btn.style.display='';
+  }else{
+    btn.style.display='none';
+    res.style.display='none';
+    res.textContent='';
+  }
+}
+_updatePingVisibility(_currentProvider);
+
+async function pingProvider(warm=false){
+  const pingBtn=document.getElementById('ping-btn');
+  const sendBtn=document.getElementById('btn');
+  const res=document.getElementById('ping-result');
+  const myGen=warm?++_pingGen:_pingGen; // each warm-ping gets a unique generation
+  const modelPinged=_currentModel;
+  pingBtn.disabled=true;
+  pingBtn.textContent='Testing…';
+  res.style.display='';
+  if(warm){
+    sendBtn.disabled=true;
+    res.style.color='var(--muted)';
+    res.textContent='⏳ Warming up '+modelPinged+'…';
+  }else{
+    res.style.color='var(--muted)';
+    res.textContent='…';
+  }
+  try{
+    const r=await fetch('/ping-provider',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:_currentProvider,model:modelPinged})});
+    const d=await r.json();
+    // If a newer warm-ping started (user switched model again), discard this stale result
+    if(warm&&myGen!==_pingGen){pingBtn.disabled=false;pingBtn.textContent='📡 Test';return;}
+    if(d.ok){
+      res.style.color='#4ade80';
+      res.textContent='✓ '+modelPinged+' ready ('+d.ms+'ms)';
+    }else{
+      res.style.color='#f87171';
+      res.textContent='✗ '+(d.error||'No response');
+    }
+  }catch(e){
+    if(warm&&myGen!==_pingGen){pingBtn.disabled=false;pingBtn.textContent='📡 Test';return;}
+    res.style.color='#f87171';
+    res.textContent='✗ Cannot reach server';
+  }
+  pingBtn.disabled=false;
+  pingBtn.textContent='📡 Test';
+  if(warm&&myGen===_pingGen) sendBtn.disabled=false;
+}
+
 async function switchProvider(provider){
   const pSel=document.getElementById('provider-select');
   const mSel=document.getElementById('model-select');
@@ -911,6 +971,9 @@ async function switchProvider(provider){
       _currentModel=d.model;
       document.querySelector('.hdr-info p').textContent='BackupPulse \xb7 '+provider;
       populateModelDropdown(provider, d.model);
+      _updatePingVisibility(provider);
+      // Auto-ping when switching to a local provider
+      if(_LOCAL_PROVIDERS_UI.has(provider)) pingProvider(true);
       addMsg('bot','Switched to <b>'+provider+'</b> &mdash; <b>'+d.model+'</b>. Your next question will use this model.');
     }else{
       addMsg('err','&#x26A0;&#xFE0F; '+(d.error||'Failed to switch provider'));

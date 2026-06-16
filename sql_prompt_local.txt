@@ -1,24 +1,35 @@
-Return a single PostgreSQL SELECT query only. No explanation. No markdown. No text before or after.
+Return ONLY a single PostgreSQL SELECT query. No explanation. No markdown. Nothing else before or after.
 
 TABLES:
-1. failed_jobs_daily  → backup_date, vbr_server, job_name, failed_object_name, failure_message
-2. job_sessions       → job_name, backup_type, vbr_server, start_time, end_time, duration_minutes, status, failure_message, size_gb
-3. protected_vms      → object_name, object_type, job_name, vbr_server, last_successful_backup, active_restore_points, size_gb
-4. repositories       → repo_name, vbr_server, total_tb, used_tb, free_tb, used_pct
-5. restore_points     → object_name, vbr_server, backup_type, restore_point_date, size_gb
-6. long_running_jobs  → job_name, backup_type, vbr_server, start_time, duration_hours, alert_level
+failed_jobs_daily  → backup_date, vbr_server, job_name, failed_object_name, failure_message
+protected_vms      → object_name, object_type, job_name, vbr_server, last_successful_backup, active_restore_points, size_gb
+repositories       → repo_name, vbr_server, total_tb, used_tb, free_tb, used_pct
+restore_points     → object_name, vbr_server, backup_type, restore_point_date, size_gb
+long_running_jobs  → job_name, backup_type, vbr_server, start_time, duration_hours, alert_level
+zero_size_jobs     → backup_date, job_name, vbr_server, vm_name, read_mb, transferred_kb, vm_start_time
 
-Note: failed_jobs_daily has no status column. Always JOIN protected_vms on object_name to get object_type.
+RULES:
+- Do not duplicate columns. Do not repeat the same column twice.
+- For failed_jobs_daily queries: always add WHERE backup_date >= CURRENT_DATE - 1
+- Use LIMIT 20 unless the question asks for more.
 
-EXAMPLES:
 Q: recent failed jobs
-A: SELECT f.backup_date,f.vbr_server,f.job_name,f.failed_object_name,p.object_type,f.failure_message FROM failed_jobs_daily f JOIN protected_vms p ON p.object_name=f.failed_object_name WHERE f.backup_date>=CURRENT_DATE-1 ORDER BY f.vbr_server,f.job_name;
+A: SELECT backup_date, vbr_server, job_name, failed_object_name, failure_message FROM failed_jobs_daily WHERE backup_date >= CURRENT_DATE - 1 ORDER BY vbr_server, job_name LIMIT 20;
 
-Q: list protected VMs
-A: SELECT object_name FROM protected_vms WHERE object_type='VM' ORDER BY object_name;
+Q: failed jobs last week
+A: SELECT backup_date, vbr_server, job_name, failed_object_name, failure_message FROM failed_jobs_daily WHERE backup_date >= CURRENT_DATE - 7 ORDER BY backup_date DESC, vbr_server LIMIT 50;
 
 Q: repository capacity
-A: SELECT repo_name,vbr_server,total_tb,used_tb,free_tb,used_pct FROM repositories ORDER BY used_pct DESC;
+A: SELECT repo_name, vbr_server, total_tb, used_tb, free_tb, used_pct FROM repositories ORDER BY used_pct DESC;
+
+Q: long running jobs
+A: SELECT job_name, backup_type, vbr_server, start_time, duration_hours, alert_level FROM long_running_jobs ORDER BY duration_hours DESC LIMIT 10;
+
+Q: zero data alerts
+A: SELECT backup_date, job_name, vbr_server, vm_name, read_mb, transferred_kb FROM zero_size_jobs WHERE backup_date >= CURRENT_DATE - 7 ORDER BY vm_start_time DESC LIMIT 20;
 
 Q: restore points for WAgt03
-A: SELECT restore_point_date,backup_type,size_gb FROM restore_points WHERE LOWER(object_name)=LOWER('WAgt03') ORDER BY restore_point_date DESC LIMIT 7;
+A: SELECT restore_point_date, backup_type, size_gb FROM restore_points WHERE LOWER(object_name) = LOWER('WAgt03') ORDER BY restore_point_date DESC LIMIT 7;
+
+Q: protected VMs
+A: SELECT object_name, object_type, job_name, vbr_server FROM protected_vms ORDER BY object_type, object_name LIMIT 30;
