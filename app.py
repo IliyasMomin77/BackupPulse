@@ -6,6 +6,9 @@ import json
 import smtplib
 import logging
 import time
+import hmac as _hmac
+import hashlib
+import base64
 from logging.handlers import RotatingFileHandler
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -154,6 +157,9 @@ SNOW_INSTANCE         = os.getenv("SNOW_INSTANCE", "")
 SNOW_USER             = os.getenv("SNOW_USER", "")
 SNOW_PASS             = os.getenv("SNOW_PASS", "")
 SNOW_ASSIGNMENT_GROUP = os.getenv("SNOW_ASSIGNMENT_GROUP", "")
+
+TEAMS_WEBHOOK_SECRET  = os.getenv("TEAMS_WEBHOOK_SECRET", "")
+TEAMS_SNOW_OFFERING   = os.getenv("TEAMS_SNOW_OFFERING", "123")
 
 
 # Known selectable models per provider (shown in the UI dropdown)
@@ -626,16 +632,23 @@ def process_question(question):
     else:
         # Cloud providers: full SQL generation + LLM explain
         sql_user = (
-            "Generate a PostgreSQL SELECT query to answer this question:\n"
-            + question + "\n"
-            "If NOT a data question, reply DIRECT: followed by a short answer.\n"
-            "Otherwise SQL only. No markdown."
+            "Question: " + question + "\n\n"
+            "INSTRUCTION: If this requires database data, respond with a valid PostgreSQL SELECT query ONLY. "
+            "No explanation, no prose, no markdown — just the raw SQL starting with SELECT.\n"
+            "If it is a greeting or general knowledge question (not about backup data), "
+            "reply with DIRECT: followed by a brief answer."
         )
         raw_sql = call_llm(sql_user, load_sql_prompt(), max_tokens=300)
         sql_clean = re.sub(r"```sql|```", "", raw_sql).strip()
         if sql_clean.upper().startswith("DIRECT:"):
-            reply = sql_clean[7:].strip()
-            log.info(f"[CHAT] DIRECT answer — {round(time.perf_counter()-t0,3)}s")
+            direct_body = sql_clean[7:].strip()
+            if re.search(r'\bSELECT\b', direct_body, re.IGNORECASE):
+                # Model misclassified a data question — extract the SQL and run it
+                sql_clean = direct_body
+                log.info(f"[CHAT] DIRECT contained SQL — rerouting to query path")
+            else:
+                reply = direct_body
+                log.info(f"[CHAT] DIRECT answer — {round(time.perf_counter()-t0,3)}s")
 
         if not reply and not raw_sql:
             reply = "The AI did not return a response. Please try again."
@@ -645,10 +658,13 @@ def process_question(question):
             sql = re.sub(r"```sql|```", "", raw_sql).strip()
             if not sql.upper().startswith("SELECT"):
                 m = re.search(r"(SELECT\b.+)", sql, re.IGNORECASE | re.DOTALL)
-                sql = m.group(1).strip() if m else sql
+                sql = m.group(1).strip() if m else ""
 
-            forbidden = ["update", "delete", "insert", "drop", "alter", "truncate"]
-            if any(w in sql.lower() for w in forbidden):
+            if not sql:
+                # LLM returned plain text instead of SQL — use it as a direct answer
+                reply = raw_sql.strip() or "I couldn't generate a query for that. Please try rephrasing."
+                log.info(f"[CHAT] LLM returned text not SQL — used as direct reply")
+            elif any(w in sql.lower() for w in ["update", "delete", "insert", "drop", "alter", "truncate"]):
                 log.warning(f"[CHAT] blocked write SQL attempt — {sql[:80]}")
                 reply = "I can only read backup data. Write operations are not allowed."
             else:
@@ -669,12 +685,8 @@ def process_question(question):
                         "[QUERY RESULTS]\n" + sql + "\n" + str(rows[:50])
                         + "\n\n[USER QUESTION]\n" + question
                         + ("\n\n" + past_fix if past_fix else "")
-                        + "\n\nReply in a helpful, conversational tone — like a knowledgeable colleague, "
-                        "not a formal report. Lead with the key finding, use bullet points for lists, "
-                        "bold the most important names and numbers with **text**, and suggest a clear "
-                        "next step if there is a problem."
                     )
-                    reply = call_llm(explain_prompt, load_system_prompt(), max_tokens=450)
+                    reply = call_llm(explain_prompt, load_system_prompt(), max_tokens=800)
                     log.info(f"[CHAT] cloud explain done rows={len(rows)} — {round(time.perf_counter()-t0,3)}s")
 
     _log_qa(question, reply, round(time.perf_counter() - t0, 3), MODEL_PROVIDER)
@@ -1095,6 +1107,332 @@ def send_healthcheck():
     except Exception as e:
         log.error(f"[ROUTE /send-healthcheck] error={e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# TEAMS BOT — Outgoing Webhook
+# ============================================================
+
+def _verify_teams_hmac(auth_header, body_bytes):
+    """Verify Teams HMAC-SHA256 signature. Returns True in dev if secret not configured."""
+    if not TEAMS_WEBHOOK_SECRET:
+        return True
+    if not auth_header.startswith("HMAC "):
+        return False
+    try:
+        token = base64.b64decode(TEAMS_WEBHOOK_SECRET)
+        mac = _hmac.new(token, body_bytes, hashlib.sha256)
+        expected = "HMAC " + base64.b64encode(mac.digest()).decode()
+        return _hmac.compare_digest(auth_header, expected)
+    except Exception:
+        return False
+
+
+def _teams_groq(prompt, system=None, max_tokens=400):
+    """Always call Groq for Teams — independent of the global MODEL_PROVIDER."""
+    return call_openai_compatible(prompt, system, GROQ_URL, GROQ_API_KEY, GROQ_MODEL, max_tokens)
+
+
+def _run_query_params(sql, params=()):
+    """Parameterised DB query — safe for values extracted from user messages."""
+    t0 = time.perf_counter()
+    conn = psycopg2.connect(**DB_CONFIG)
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        log.info(f"[DB/TEAMS] rows={len(rows)} duration={round(time.perf_counter()-t0,3)}s")
+        return rows
+    except Exception as e:
+        log.error(f"[DB/TEAMS] FAILED error={e}")
+        raise
+    finally:
+        conn.close()
+
+
+_TEAMS_SKIP_WORDS = {
+    "is", "in", "the", "a", "an", "for", "of", "on", "was", "check",
+    "last", "backup", "status", "get", "add", "list", "all", "show",
+    "please", "can", "you", "what", "this", "week", "report", "sla",
+    "protected", "any", "has", "have", "how", "do", "i", "it", "my",
+    "recent", "latest", "find", "server", "servers", "vm", "vms",
+    "machine", "machines", "starting", "with", "from", "backuppulse",
+    "backuppulsebot", "good", "bad", "if", "not", "did", "does",
+    "successful", "successfully", "failed", "fine", "okay", "ok",
+    "when", "where", "which", "like", "just", "now", "were", "been",
+    "run", "ran", "working", "complete", "completed", "job", "jobs",
+}
+
+
+def _extract_machine(text):
+    """Extract the most likely server/VM name from a Teams message.
+    Prefers tokens containing digits (e.g. LApp04, WAgt03) as these match
+    real server naming conventions over common English words."""
+    tokens = re.findall(r'\b([A-Za-z][A-Za-z0-9\-_]{2,}(?:\*)?)\b', text)
+    candidates = [t for t in tokens if t.lower() not in _TEAMS_SKIP_WORDS]
+    # Prefer tokens with a digit — real server names almost always have one
+    with_digit = [t for t in candidates if re.search(r'\d', t)]
+    return with_digit[0] if with_digit else (candidates[0] if candidates else None)
+
+
+def _teams_check_protected(machine):
+    rows = _run_query_params(
+        "SELECT object_name, object_type, job_name, vbr_server, last_successful_backup "
+        "FROM protected_vms WHERE LOWER(object_name) = LOWER(%s) LIMIT 1",
+        (machine,)
+    )
+    if not rows:
+        return (
+            f"⚠️ **{machine}** is **not found** in the backup system.\n\n"
+            f"To get it added, raise a ServiceNow request:\n"
+            f"**Offering #{TEAMS_SNOW_OFFERING} — Add Server to Backup**\n\n"
+            f"Provide the server name, OS type, and estimated data size. "
+            f"The backup team will configure it within 2 business days."
+        )
+    r = rows[0]
+    last = r.get("last_successful_backup")
+    last_str = last.strftime("%Y-%m-%d %H:%M") if last else "No record"
+    return (
+        f"✅ **{r['object_name']}** is protected.\n"
+        f"- **Type:** {r.get('object_type', 'VM')}\n"
+        f"- **Job:** {r.get('job_name', '—')}\n"
+        f"- **VBR Server:** {r.get('vbr_server', '—')}\n"
+        f"- **Last Successful Backup:** {last_str}"
+    )
+
+
+def _teams_last_backup(machine):
+    protected = _run_query_params(
+        "SELECT last_successful_backup FROM protected_vms "
+        "WHERE LOWER(object_name) = LOWER(%s) LIMIT 1",
+        (machine,)
+    )
+    if not protected:
+        return (
+            f"⚠️ **{machine}** is not registered in the backup system.\n"
+            f"Raise SNOW Offering #{TEAMS_SNOW_OFFERING} to get it added."
+        )
+    last = protected[0].get("last_successful_backup")
+    last_str = last.strftime("%Y-%m-%d %H:%M") if last else "No successful backup on record"
+
+    failures = _run_query_params(
+        "SELECT backup_date, job_name, failure_message FROM failed_jobs_daily "
+        "WHERE LOWER(failed_object_name) = LOWER(%s) "
+        "ORDER BY backup_date DESC LIMIT 3",
+        (machine,)
+    )
+    lines = [
+        f"**Backup status for {machine}:**",
+        f"- Last successful backup: **{last_str}**",
+    ]
+    if failures:
+        lines.append("\nRecent failures:")
+        for r in failures:
+            msg = (r.get("failure_message") or "")[:80]
+            lines.append(f"  ❌ {r['backup_date']} — {r['job_name']}: {msg}")
+    else:
+        lines.append("- No recent failures ✅")
+    return "\n".join(lines)
+
+
+
+def _teams_list_vms(pattern):
+    if pattern:
+        like = pattern.replace("*", "%")
+        rows = _run_query_params(
+            "SELECT object_name, object_type, job_name, vbr_server FROM protected_vms "
+            "WHERE LOWER(object_name) LIKE LOWER(%s) ORDER BY object_name LIMIT 30",
+            (like,)
+        )
+    else:
+        rows = _run_query_params(
+            "SELECT object_name, object_type, job_name, vbr_server FROM protected_vms "
+            "ORDER BY object_name LIMIT 30"
+        )
+    if not rows:
+        pat_str = f" matching *{pattern}*" if pattern else ""
+        return f"No protected VMs found{pat_str}."
+    pat_str = f" matching *{pattern}*" if pattern else ""
+    lines = [f"**Protected VMs{pat_str} ({len(rows)}):**\n"]
+    for r in rows:
+        lines.append(f"  • **{r['object_name']}** ({r.get('object_type','VM')}) — {r.get('job_name','')}")
+    return "\n".join(lines)
+
+
+def _teams_sla_report():
+    rows = _run_query_params(
+        """
+        SELECT
+            COUNT(DISTINCT p.object_name)                                         AS total_protected,
+            COUNT(DISTINCT f.failed_object_name)                                  AS total_failed,
+            ROUND(100.0 * (COUNT(DISTINCT p.object_name)
+                         - COUNT(DISTINCT f.failed_object_name))
+                  / NULLIF(COUNT(DISTINCT p.object_name), 0), 1)                 AS sla_pct
+        FROM protected_vms p
+        LEFT JOIN failed_jobs_daily f
+            ON  LOWER(p.object_name) = LOWER(f.failed_object_name)
+            AND f.backup_date >= CURRENT_DATE - 7
+        """
+    )
+    if not rows:
+        return "Unable to retrieve SLA data right now."
+    r = rows[0]
+    total  = int(r.get("total_protected") or 0)
+    failed = int(r.get("total_failed") or 0)
+    sla    = float(r.get("sla_pct") or 0)
+    emoji  = "✅" if sla >= 95 else "⚠️" if sla >= 85 else "🔴"
+    return (
+        f"**{emoji} Backup SLA Report — Last 7 Days**\n\n"
+        f"- Protected objects: **{total}**\n"
+        f"- Successful: **{total - failed}**\n"
+        f"- Failed: **{failed}**\n"
+        f"- SLA: **{sla}%**"
+    )
+
+
+def _teams_guidance(machine):
+    name = f"**{machine}**" if machine else "this server"
+    return (
+        f"To add {name} to the backup schedule:\n\n"
+        f"1. Go to ServiceNow and raise a service request\n"
+        f"2. Select **Offering #{TEAMS_SNOW_OFFERING} — Add Server to Backup**\n"
+        f"3. Fill in: server name, OS type, data size estimate\n"
+        f"4. The backup team will configure and confirm within 2 business days\n\n"
+        f"_Questions? Contact your Backup Administrator._"
+    )
+
+
+def _teams_help():
+    return (
+        "👋 **BackupPulse Bot** — here's what I can do:\n\n"
+        "- `is WApp01 in backup?` — check if a server is protected\n"
+        "- `last backup of WAgt03` — last backup date and recent failures\n"
+        "- `list VMs starting with web*` — find protected servers by name\n"
+        "- `SLA report this week` — backup success rate for last 7 days\n"
+        "- `how to add WServer01 to backup` — onboarding guide\n\n"
+        "_You can also ask free-form backup questions and I'll query the database._"
+    )
+
+
+def _process_teams_message(text):
+    q = text.lower().strip()
+
+    # Help / greeting / empty /backuppulse
+    if re.match(r'^(hi|hello|help|hey|\?)\s*$', q) or not q:
+        return _teams_help()
+
+    # "is X in backup?" / "is X protected?" / "backup status of X"
+    if re.search(r'\b(is|check|was)\b.{0,40}\b(in backup|protected|backed up)\b'
+                 r'|\bbackup\s+status\s+of\b', q):
+        machine = _extract_machine(text)
+        return _teams_check_protected(machine) if machine else \
+               "Please mention the server name. Example: *is WApp01 in backup?*"
+
+    # "last backup of X" / "recent backup X" / "backup history X"
+    if re.search(r'\b(last|recent|latest)\b.{0,20}\bbackup\b'
+                 r'|\bbackup.{0,20}\b(history|status)\b', q):
+        machine = _extract_machine(text)
+        return _teams_last_backup(machine) if machine else \
+               "Please mention the server name. Example: *last backup of WApp01*"
+
+    # "add X to backup" / "how to get X backed up" / "not in backup"
+    if re.search(r'\b(add|get|put|register|onboard|enrol)\b.{0,40}\bbackup\b'
+                 r'|\bnot in backup\b', q):
+        return _teams_guidance(_extract_machine(text))
+
+    # All data queries — Groq generates SQL, executes, Groq formats naturally
+    try:
+        # Step 1: Groq generates SQL
+        raw = _teams_groq(text, system=load_sql_prompt(), max_tokens=300)
+        sql_clean = re.sub(r"```sql|```", "", raw or "").strip()
+        m = re.search(r"(SELECT\b[^;]+;?)", sql_clean, re.IGNORECASE | re.DOTALL)
+        sql_clean = m.group(1).strip() if m else ""
+        if not sql_clean:
+            return _teams_help()
+
+        # Step 2: Execute SQL
+        rows = run_query(sql_clean)
+        if not rows:
+            return "No data found for that query."
+
+        # Step 3: Groq formats results as natural language
+        keys = list(rows[0].keys())
+        data_lines = [", ".join(keys)]
+        for r in rows[:40]:
+            data_lines.append(", ".join(str(r.get(k, "")) for k in keys))
+        if len(rows) > 40:
+            data_lines.append(f"({len(rows) - 40} more rows not shown)")
+        data_text = "\n".join(data_lines)
+
+        fmt_system = (
+            "You are BackupPulse, a Veeam Backup & Replication assistant in Microsoft Teams.\n"
+            "You receive a user question and raw database results. Write a natural, conversational reply — "
+            "like a helpful colleague, not a system dump.\n\n"
+            "TONE & STYLE:\n"
+            "- Answer the question directly. Lead with the key finding.\n"
+            "- Speak naturally: 'Yes, the last backup for LApp04 was successful on 2026-06-15 at 13:56' not a table.\n"
+            "- No preamble ('Sure!', 'Great question!', 'Based on the data...'). Get straight to the point.\n"
+            "- No markdown headers (##). Use **bold** for server names, dates, and key numbers.\n"
+            "- Keep under 250 words.\n\n"
+            "CONTENT RULES:\n"
+            "- Backup status: ✅ success/protected, ❌ failed/not found, ⚠️ warning or missing data.\n"
+            "- 'Was the backup good/successful?' → check last_successful_backup timestamp. If recent, say yes with the date.\n"
+            "- For lists: group by type (VMs / Agents / File Servers) with bullet points. Show server names clearly.\n"
+            "- For counts: state the number first, then break down by type if available.\n"
+            "- For SLA: state the percentage prominently, then protected vs failed counts.\n"
+            "- For storage: mention used% and free space per repo.\n"
+            "- For failures: name the server, job, and give a brief reason.\n"
+            "- Timestamps: format as 'YYYY-MM-DD HH:MM' — no seconds.\n"
+            "- If result is empty: say what wasn't found and suggest checking the server name spelling."
+        )
+        reply = _teams_groq(
+            f"Question: {text}\n\nDatabase results:\n{data_text}",
+            system=fmt_system,
+            max_tokens=500
+        )
+        return reply or "No response from model."
+    except Exception as e:
+        log.error(f"[TEAMS] fallback error: {e}")
+        return "Sorry, I couldn't process that. Type *help* to see what I can do."
+
+
+@app.route("/api/teams", methods=["POST"])
+def teams_webhook():
+    body = request.get_data()
+    auth = request.headers.get("Authorization", "")
+
+    if not _verify_teams_hmac(auth, body):
+        log.warning("[TEAMS] HMAC verification failed — possible spoofed request")
+        return jsonify({"type": "message", "text": "❌ Unauthorized"}), 401
+
+    data     = request.get_json(force=True) or {}
+    raw_text = data.get("text", "")
+
+    # Strip HTML tags (@mention wraps in <at>...</at>)
+    text = re.sub(r'<[^>]+>', '', raw_text).strip()
+    # Decode HTML entities Teams injects between the @mention and the message body
+    text = re.sub(r'&nbsp;', ' ', text)
+    text = re.sub(r'&amp;', '&', text)
+    text = re.sub(r'&lt;', '<', text).replace('&gt;', '>').strip()
+    # Strip bot name that remains after tag removal: "BackupPulseBot is X" → "is X"
+    text = re.sub(r'^@?BackupPulseBot?\s*', '', text, flags=re.IGNORECASE).strip()
+    # Strip /backuppulse command prefix
+    text = re.sub(r'^/?backuppulsebot?\s*', '', text, flags=re.IGNORECASE).strip()
+
+    log.info(f"[TEAMS] message={text[:120]!r}")
+
+    if not text:
+        return jsonify({"type": "message", "text": _teams_help()})
+
+    try:
+        t0    = time.perf_counter()
+        reply = _process_teams_message(text)
+        log.info(f"[TEAMS] replied in {round(time.perf_counter()-t0, 2)}s")
+        return jsonify({"type": "message", "text": reply})
+    except Exception as e:
+        log.error(f"[TEAMS] error: {e}")
+        return jsonify({"type": "message", "text": "⚠️ Something went wrong. Please try again."})
 
 
 if __name__ == "__main__":

@@ -309,7 +309,11 @@ def insert_protected_vms(cur):
         else:
             otype, sz = "VM", round(random.uniform(40, 400), 2)
 
-        if obj in BAD_OBJECTS:
+        if obj == "NAS-SRV01":
+            # Persistent failure scenario — no successful backup for 5 days
+            last_backup = now - timedelta(days=5)
+            rp_count = random.randint(3, 5)
+        elif obj in BAD_OBJECTS:
             last_backup = now - timedelta(hours=random.randint(26, 48))
             rp_count = random.randint(3, 8)
         else:
@@ -364,11 +368,12 @@ def insert_failed_jobs_daily(cur):
     count = 0
     for day_offset in range(30, -1, -1):
         run_date = today - timedelta(days=day_offset)
-        # Last 3 days: all 4 bad objects ALWAYS fail (guaranteed for demo queries)
+        # Last 3 days: all bad objects ALWAYS fail (guaranteed for demo queries)
+        # NAS-SRV01: guaranteed for last 6 days (persistent failure scenario)
         # Older history: 65% chance so it looks realistic
-        guaranteed = day_offset <= 2
         for obj in BAD_OBJECTS:
-            if guaranteed or random.random() < 0.65:
+            nas_persistent = (obj == "NAS-SRV01" and day_offset <= 5)
+            if day_offset <= 2 or nas_persistent or random.random() < 0.65:
                 jname, _, vbr = OBJ_TO_JOB[obj]
                 cur.execute(
                     """INSERT INTO failed_jobs_daily
