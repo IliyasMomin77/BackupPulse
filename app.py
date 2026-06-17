@@ -14,6 +14,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template
+from pci_firewall import scrub as pci_scrub
 
 # ── Logging setup ──────────────────────────────────────────────
 # logs/app.log    — all system activity (INFO+): startup, LLM calls, DB queries, route hits
@@ -161,6 +162,13 @@ SNOW_ASSIGNMENT_GROUP = os.getenv("SNOW_ASSIGNMENT_GROUP", "")
 TEAMS_WEBHOOK_SECRET  = os.getenv("TEAMS_WEBHOOK_SECRET", "")
 TEAMS_SNOW_OFFERING   = os.getenv("TEAMS_SNOW_OFFERING", "123")
 
+# AWS Bedrock — private endpoint, no PCI data ever sent (scrubbed locally first)
+AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+AWS_REGION            = os.getenv("AWS_REGION", "ap-south-1")
+BEDROCK_MODEL         = os.getenv("BEDROCK_MODEL", "meta.llama3-1-8b-instruct-v1:0")
+BEDROCK_GUARDRAIL_ID  = os.getenv("BEDROCK_GUARDRAIL_ID", "")
+
 
 # Known selectable models per provider (shown in the UI dropdown)
 # Groq & OpenRouter: verified free models as of 2026
@@ -197,6 +205,13 @@ PROVIDER_MODELS = {
     "lmstudio": [
         "phi-4-mini-instruct",
     ],
+    # AWS Bedrock (ap-south-1) — VPC-safe, PCI scrubbed before sending + Guardrails on AWS side
+    "bedrock": [
+        "meta.llama3-8b-instruct-v1:0",          # cheapest  ~$0.30/1M tokens
+        "meta.llama3-70b-instruct-v1:0",         # smarter   ~$0.72/1M tokens
+        "anthropic.claude-3-haiku-20240307-v1:0", # best quality ~$0.25/1M in
+        "mistral.ministral-3-8b-instruct",        # fast alternative
+    ],
 }
 
 
@@ -208,6 +223,7 @@ def _get_active_model():
         "openai":      OPENAI_MODEL,
         "copilot":     COPILOT_MODEL,
         "lmstudio":    LMSTUDIO_MODEL,
+        "bedrock":     BEDROCK_MODEL,
     }.get(MODEL_PROVIDER, "")
 
 
@@ -298,8 +314,49 @@ def call_gemini(prompt, system=None):
     return reply
 
 
+def call_bedrock(prompt, system=None, max_tokens=500):
+    try:
+        import boto3
+        client = boto3.client(
+            service_name="bedrock-runtime",
+            region_name=AWS_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        )
+        kwargs = dict(
+            modelId=BEDROCK_MODEL,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
+        )
+        if system:
+            kwargs["system"] = [{"text": system}]
+        if BEDROCK_GUARDRAIL_ID:
+            kwargs["guardrailConfig"] = {
+                "guardrailIdentifier": BEDROCK_GUARDRAIL_ID,
+                "guardrailVersion": "DRAFT",
+                "trace": "enabled",
+            }
+        log.info(f"[BEDROCK] calling model={BEDROCK_MODEL} guardrail={'yes' if BEDROCK_GUARDRAIL_ID else 'no'}")
+        t0 = time.perf_counter()
+        resp = client.converse(**kwargs)
+        duration = round(time.perf_counter() - t0, 2)
+        reply = resp["output"]["message"]["content"][0]["text"].strip()
+        log.info(f"[BEDROCK] OK duration={duration}s reply_len={len(reply)}")
+        return reply
+    except Exception as e:
+        log.error(f"[BEDROCK] Error: {e}")
+        raise
+
+
 def call_llm(prompt, system=None, max_tokens=500):
-    if MODEL_PROVIDER == "gemini":
+    # PCI firewall — scrub user input before sending to any provider
+    prompt, redacted = pci_scrub(prompt)
+    if redacted:
+        log.warning(f"[PCI_FIREWALL] Scrubbed before LLM call: {redacted}")
+
+    if MODEL_PROVIDER == "bedrock":
+        return call_bedrock(prompt, system, max_tokens)
+    elif MODEL_PROVIDER == "gemini":
         return call_gemini(prompt, system)
     elif MODEL_PROVIDER == "groq":
         return call_openai_compatible(prompt, system, GROQ_URL, GROQ_API_KEY, GROQ_MODEL, max_tokens)
@@ -763,7 +820,7 @@ def _fetch_health_data():
 def _configured_providers():
     """Return providers to show in the UI — controlled by ENABLED_PROVIDERS in config."""
     enabled = {p.strip() for p in os.getenv("ENABLED_PROVIDERS", "groq,openrouter,lmstudio").split(",")}
-    order   = ["groq", "openrouter", "lmstudio", "gemini", "openai", "copilot"]
+    order   = ["groq", "openrouter", "lmstudio", "gemini", "openai", "copilot", "bedrock"]
     return [p for p in order if p in enabled]
 
 
@@ -781,11 +838,11 @@ def index():
 @app.route("/switch-provider", methods=["POST"])
 def switch_provider():
     global MODEL_PROVIDER, _SYSTEM_PROMPT, _SQL_PROMPT
-    global GROQ_MODEL, OPENROUTER_MODEL, GEMINI_MODEL, OPENAI_MODEL, COPILOT_MODEL, LMSTUDIO_MODEL
+    global GROQ_MODEL, OPENROUTER_MODEL, GEMINI_MODEL, OPENAI_MODEL, COPILOT_MODEL, LMSTUDIO_MODEL, BEDROCK_MODEL
     data = request.get_json()
     provider = data.get("provider", "").strip().lower()
     model    = data.get("model",    "").strip()
-    valid = {"groq", "openrouter", "gemini", "openai", "copilot", "lmstudio"}
+    valid = {"groq", "openrouter", "gemini", "openai", "copilot", "lmstudio", "bedrock"}
     if provider not in valid:
         return jsonify({"error": f"Unknown provider: {provider}"}), 400
 
@@ -801,6 +858,7 @@ def switch_provider():
         elif provider == "openai":     OPENAI_MODEL     = model
         elif provider == "copilot":    COPILOT_MODEL    = model
         elif provider == "lmstudio":   LMSTUDIO_MODEL   = model
+        elif provider == "bedrock":    BEDROCK_MODEL    = model
 
 
     if provider in _LOCAL_PROVIDERS:
