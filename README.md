@@ -2,7 +2,7 @@
 
 Ask plain-English questions about your Veeam backup estate. Get instant answers from all VBR servers in one place.
 
-> **Flexible by design:** Works with any LLM — local (LM Studio, Ollama) or cloud (Groq, OpenRouter, Gemini, OpenAI). Switch providers live from the UI without restarting.
+> **Flexible by design:** Works with any LLM — local (LM Studio), cloud (Groq, OpenRouter, Gemini, OpenAI), or secure enterprise (AWS Bedrock). Switch providers live from the UI without restarting.
 
 ---
 
@@ -26,20 +26,22 @@ BackupPulse replaces that with one question: `last 24 hours failed jobs`
                     ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      Flask (app.py)                          │
-│  1. Greeting? → instant reply                                │
-│  2. Send question to LLM → get SQL                           │
-│  3. DIRECT: answer? → return immediately (no DB)             │
-│  4. Run SQL on PostgreSQL → get rows                         │
-│  5. Local model? → Python formats result                     │
+│  1. PCI Firewall — strip card/SSN/PAN before any LLM call   │
+│  2. Greeting? → instant reply                                │
+│  3. Send question to LLM → get SQL                           │
+│  4. DIRECT: answer? → return immediately (no DB)             │
+│  5. Run SQL on PostgreSQL → get rows                         │
+│  6. Local model? → Python formats result                     │
 │     Cloud model? → LLM explains result                       │
-│  6. Log Q&A to logs/qa.jsonl                                 │
+│  7. Log Q&A to logs/qa.jsonl                                 │
 └───────────────┬──────────────────────┬──────────────────────┘
                 │                      │
     ┌───────────▼───────────┐  ┌───────▼──────────────────┐
     │      LLM Router       │  │       PostgreSQL          │
     │  groq  / openrouter   │  │  failed_jobs_daily        │
-    │  lmstudio / ollama    │  │  job_sessions             │
+    │  lmstudio             │  │  job_sessions             │
     │  gemini / openai      │  │  repositories             │
+    │  AWS Bedrock          │  │  protected_vms            │
     └───────────────────────┘  └───────────────────────────┘
 ```
 
@@ -50,33 +52,144 @@ BackupPulse replaces that with one question: `last 24 hours failed jobs`
 - The LLM never has direct access to production Veeam databases
 - Raw Veeam data is pulled into clean PostgreSQL tables — the LLM queries those
 - If a query goes wrong, worst case is a bad SELECT on the reporting DB, not the production system
-- As LLMs improve, this middle layer can eventually be removed
+- Read-only DB user (`veeam_bot`) — cannot INSERT, UPDATE, or DELETE by design
 
 ---
 
 ## Cloud vs Local — Two Different Pipelines
 
-**Cloud (Groq, OpenRouter, Gemini):** Two LLM calls
+**Cloud (Groq, OpenRouter, Bedrock):** Two LLM calls
 
 ```
-Question → [LLM 1: generate SQL] → PostgreSQL → rows → [LLM 2: explain result] → answer
+Question → [PCI Firewall] → [LLM 1: generate SQL] → PostgreSQL → rows → [LLM 2: explain result] → answer
 ```
 
-**Local (LM Studio, Ollama):** One LLM call
+**Local (LM Studio):** One LLM call
 
 ```
-Question → [LLM: generate SQL] → PostgreSQL → rows → Python formats → answer
+Question → [PCI Firewall] → [LLM: generate SQL] → PostgreSQL → rows → Python formats → answer
 ```
 
 **Why the difference?**  
-Small local models (phi-4-mini, 3.8B) running on a laptop CPU cannot reliably handle long system prompts or complex explanation tasks — pushing a large model on demo hardware causes slowdowns and poor output. So the local pipeline uses a shorter, simpler prompt and skips the second LLM call entirely. Python handles the formatting instead. Cloud models have no such constraint.
+Small local models (phi-4-mini, 3.8B) running on a laptop CPU cannot reliably handle long system prompts or complex explanation tasks. So the local pipeline uses a shorter, simpler prompt and skips the second LLM call. Python handles formatting instead.
 
-This also means two separate prompt files:
+---
 
-| File | Used by | Purpose |
+## Security Architecture
+
+### PCI Firewall (Local — Zero Cost)
+
+Every user message passes through `pci_firewall.py` **before any network call** — regardless of provider.
+
+```
+User message
+     ↓
+[pci_firewall.py]  ← runs on your machine
+  strips: credit card numbers, CVV, SSN, IBAN, Indian PAN, Aadhaar
+     ↓
+[LLM Provider]  ← never sees raw PCI data
+```
+
+Patterns detected and masked:
+
+| Data Type | Example | Masked As |
 |---|---|---|
-| `sql_prompt.txt` + `system_prompt.txt` | Cloud | Full instructions, rich formatting rules |
-| `sql_prompt_local.txt` + `system_prompt_local.txt` | Local | Shorter, simpler — matched to small model limits |
+| Credit card | `4111 1111 1111 1111` | `[CARD_REDACTED]` |
+| CVV / CVC | `CVV 123` | `[CVV_REDACTED]` |
+| US SSN | `123-45-6789` | `[SSN_REDACTED]` |
+| IBAN | `GB29 NWBK 6016 1331` | `[IBAN_REDACTED]` |
+| Indian PAN | `ABCDE1234F` | `[PAN_REDACTED]` |
+| Aadhaar | `2345 6789 0123` | `[AADHAAR_REDACTED]` |
+
+### AWS Bedrock Guardrails (Second Layer)
+
+When using the Bedrock provider, a second guardrail runs on the AWS side:
+
+- **PII anonymization** — credit cards, emails, phone numbers masked at AWS level
+- **Denied topics** — blocks non-IT questions (finance, medical, legal advice)
+- **Prompt attack protection** — blocks jailbreak attempts
+
+### Database Security
+
+- App user (`veeam_bot`) is read-only — cannot modify any data
+- SQL generation prompt explicitly blocks INSERT/UPDATE/DELETE/DROP
+- Setup/admin operations use a separate `DB_SETUP_USER` (postgres)
+
+---
+
+## AWS Bedrock — Secure Network Deployment
+
+For organizations with strict data governance, Bedrock can be deployed inside a VPC with no internet egress:
+
+```
+Private Subnet (app server)
+        │
+        │  No internet gateway
+        │
+   [VPC Interface Endpoint]   ← traffic stays inside AWS backbone
+        │                        never touches public internet
+        ▼
+   AWS Bedrock (ap-south-1)
+   bedrock-runtime.ap-south-1.amazonaws.com
+```
+
+Only the Bedrock endpoint URL needs to be whitelisted in your connectivity gateway. All other cloud providers (Groq, OpenRouter) go over the public internet and are automatically unavailable in a locked-down VPC — making Bedrock the right choice for air-gapped enterprise deployments.
+
+**Available models (ap-south-1 / Mumbai):**
+
+| Model | Cost | Notes |
+|---|---|---|
+| `meta.llama3-8b-instruct-v1:0` | ~$0.30/1M tokens | Cheapest |
+| `meta.llama3-70b-instruct-v1:0` | ~$0.72/1M tokens | Smarter |
+| `anthropic.claude-3-haiku-20240307-v1:0` | ~$0.25/1M in | Best quality |
+| `mistral.ministral-3-8b-instruct` | ~$0.10/1M tokens | Fast |
+
+---
+
+## Microsoft Teams Integration
+
+BackupPulse includes an outgoing webhook bot (**BackupPulseBot**) for Microsoft Teams.
+
+```
+Teams user: @BackupPulseBot Recent failed jobs
+                    ↓
+         ngrok (or internal URL)
+                    ↓
+         /teams-webhook endpoint
+         • HMAC-SHA256 verification
+         • HTML entity decoding
+         • Bot name stripping
+         • Machine name extraction
+                    ↓
+         Same SQL engine as chatbot
+                    ↓
+         Natural language reply → Teams
+```
+
+**Setup:**
+1. Teams Admin → Apps → Outgoing webhooks → create `BackupPulseBot`
+2. Paste callback URL: `https://<your-domain>/teams-webhook`
+3. Copy the security token → `TEAMS_WEBHOOK_SECRET` in config
+4. Run `python encrypt_config.py` to encrypt
+
+**Example queries in Teams:**
+```
+@BackupPulseBot What failed today?
+@BackupPulseBot SLA report for this week
+@BackupPulseBot Check last backup for LApp04
+@BackupPulseBot Objects not backed up in 2 days
+```
+
+---
+
+## ServiceNow Integration
+
+BackupPulse can raise and resolve ServiceNow incidents directly from the health report.
+
+- One-click incident creation from failed job rows
+- Auto-populated with VBR server, job name, and failure message
+- Resolve incidents with resolution notes from the UI
+- Configurable offering ID per job type
 
 ---
 
@@ -88,8 +201,13 @@ This also means two separate prompt files:
 | Frontend | Vanilla HTML/CSS/JS |
 | Database | PostgreSQL + psycopg2 |
 | LLM — Cloud | Groq, OpenRouter, Gemini, OpenAI |
-| LLM — Local | LM Studio, Ollama |
+| LLM — Enterprise | AWS Bedrock (boto3) |
+| LLM — Local | LM Studio |
+| PCI Firewall | `pci_firewall.py` — local regex scrubber |
+| Guardrails | AWS Bedrock Guardrails |
 | Encryption | Fernet (cryptography lib) |
+| Teams Bot | Outgoing webhook + HMAC-SHA256 |
+| Ticketing | ServiceNow REST API |
 | Logging | Python RotatingFileHandler |
 
 ---
@@ -100,23 +218,28 @@ This also means two separate prompt files:
 - Multi-server consolidation — all VBR servers in one view
 - Live provider + model switching — no restart needed
 - 100% local mode — LM Studio + phi-4-mini, zero internet
+- Microsoft Teams bot — @mention queries from Teams channels
+- PCI firewall — strips sensitive data before every LLM call
+- AWS Bedrock — enterprise-grade, VPC-safe, guardrails enforced
+- ServiceNow integration — raise and resolve incidents from the UI
 - Engineer remarks — add action notes, AI parses them
 - One-click HTML health report → email to management
-- Read-only SQL — UPDATE/DELETE/DROP blocked at app level
-- Encrypted config — API keys stored with Fernet encryption
+- Read-only SQL — UPDATE/DELETE/DROP blocked at app and DB level
+- Encrypted config — all secrets stored with Fernet encryption
 - 3-tier logging — app events, errors, and Q&A in separate files
+- SLA reporting — uses `last_successful_backup`, retried successes counted correctly
 
 ---
 
 ## Supported Providers
 
-| Provider | Type | Cost |
-|---|---|---|
-| **Groq** | Cloud | Free (rate limits) — recommended for demo |
-| **OpenRouter** | Cloud | Free models available |
-| **LM Studio** | Local | Free — zero internet |
-| **Ollama** | Local | Free — zero internet |
-| **Gemini / OpenAI / Copilot** | Cloud | Free tier / Paid |
+| Provider | Type | Cost | PCI Safe |
+|---|---|---|---|
+| **Groq** | Cloud | Free (rate limits) | PCI firewall (local) |
+| **OpenRouter** | Cloud | Free models available | PCI firewall (local) |
+| **AWS Bedrock** | Enterprise Cloud | Pay-per-token (~$0.30/1M) | PCI firewall + Guardrails |
+| **LM Studio** | Local | Free — zero internet | Data never leaves machine |
+| **Gemini / OpenAI / Copilot** | Cloud | Free tier / Paid | PCI firewall (local) |
 
 ---
 
@@ -124,38 +247,15 @@ This also means two separate prompt files:
 
 Everything runs on one laptop. Fake data generated by `db_setup.py`.
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                      Your Laptop / Desktop                        │
-│                                                                  │
-│  ┌──────────────┐         ┌───────────────────────────────────┐  │
-│  │   Browser    │         │        Flask App (app.py)         │  │
-│  │              │─────────▶        port 5000                  │  │
-│  │ localhost    │◀─────────        start-restart.py / stop.py  │  │
-│  │    :5000     │         └──────────┬──────────────┬─────────┘  │
-│  └──────────────┘                   │              │             │
-│                          ┌──────────▼───┐  ┌───────▼──────────┐ │
-│                          │  PostgreSQL   │  │   LLM Choice     │ │
-│                          │  veeam_demo   │  │                  │ │
-│                          │  (fake data   │  │  Option A:       │ │
-│                          │  from         │  │  LM Studio       │ │
-│                          │  db_setup.py) │  │  phi-4-mini      │ │
-│                          │               │  │  localhost:1234  │ │
-│                          │  3 VBR servers│  │  ← NO INTERNET   │ │
-│                          │  5 jobs       │  │                  │ │
-│                          │  30 days data │  │  Option B:       │ │
-│                          └───────────────┘  │  Groq free API   │ │
-│                                             │  ← uses internet │ │
-│  secret.key + config_final.env              └──────────────────┘ │
-│  stay on this machine only                                       │
-└──────────────────────────────────────────────────────────────────┘
-```
+**Demo data includes:**
+- 40 protected objects: 30 VMs, 8 Agents, 2 File Servers across 3 VBR servers
+- Realistic failure scenarios: CBT errors, VSS failures, agent connection issues
+- NAS-SRV01 with no successful backup for 5 days (persistent failure demo)
+- 30 days of job history with random failures and retries
 
 ---
 
-## Production Setup — Dedicated Reporting Server
-
-Real data. Multi-user. Air-gapped AI. All inside your network.
+## Production Setup — Secure Enterprise Deployment
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -164,51 +264,21 @@ Real data. Multi-user. Air-gapped AI. All inside your network.
 ║                                                                              ║
 ║  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐            ║
 ║  │  VBR Server 1   │   │  VBR Server 2   │   │  VBR Server 3   │            ║
-║  │  (HQ)           │   │  (DR Site)      │   │  (Branch)       │            ║
 ║  │  Veeam B&R      │   │  Veeam B&R      │   │  Veeam B&R      │            ║
-║  │  (internal DB)  │   │  (internal DB)  │   │  (internal DB)  │            ║
 ║  └────────┬────────┘   └────────┬────────┘   └────────┬────────┘            ║
 ║           └─────────────────────┼─────────────────────┘                     ║
-║                                 │                                            ║
 ║                    Sync Agent (scheduled, every 1h)                          ║
-║                    • Veeam REST API                                          ║
-║                    • Direct DB read (read-only user)                        ║
-║                    • PowerShell + Veeam cmdlets → CSV                       ║
-║                                 │                                            ║
 ║                                 ▼                                            ║
 ║  ┌──────────────────────────────────────────────────────────────────────┐   ║
 ║  │                        Reporting Server                               │   ║
-║  │                                                                      │   ║
-║  │  ┌──────────────────────┐    ┌──────────────────────────────────┐   │   ║
-║  │  │  BackupPulse          │    │  LM Studio (local model)         │   │   ║
-║  │  │  Flask App port 5000  │◀──▶│  localhost:1234                  │   │   ║
-║  │  │  start-restart.py     │    │  ← Zero internet, air-gapped     │   │   ║
-║  │  │  logs/ → 3 log files  │    └──────────────────────────────────┘   │   ║
-║  │  └──────────┬────────────┘                                           │   ║
-║  │             │                                                         │   ║
-║  │  ┌──────────▼──────────────────────────────────────────────────────┐ │   ║
-║  │  │           PostgreSQL (Consolidated Backup DB)                    │ │   ║
-║  │  │  failed_jobs_daily  │  job_sessions  │  protected_vms            │ │   ║
-║  │  │  repositories       │  restore_points│  long_running_jobs        │ │   ║
-║  │  │  Read-only app user (backuppulse_ro) — cannot modify data        │ │   ║
-║  │  └─────────────────────────────────────────────────────────────────┘ │   ║
+║  │  BackupPulse Flask App                                               │   ║
+║  │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────────┐ │   ║
+║  │  │ pci_firewall │  │  PostgreSQL  │  │  LLM (LM Studio local      │ │   ║
+║  │  │ (local, free)│  │  read-only   │  │  OR AWS Bedrock via VPC)   │ │   ║
+║  │  └──────────────┘  └──────────────┘  └────────────────────────────┘ │   ║
 ║  └──────────────────────────────────────────────────────────────────────┘   ║
 ║                                 │                                            ║
-║                   Internal HTTP (port 5000 or behind nginx)                  ║
-║                                 │                                            ║
-║  ┌──────────────────────────────────────────────────────────────────────┐   ║
-║  │              Engineer / Manager Workstations                          │   ║
-║  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────────┐  │   ║
-║  │  │ Engineer 1 │  │ Engineer 2 │  │ Engineer 3 │  │    Manager     │  │   ║
-║  │  │  Browser   │  │  Browser   │  │  Browser   │  │ (email report) │  │   ║
-║  │  └────────────┘  └────────────┘  └────────────┘  └────────────────┘  │   ║
-║  └──────────────────────────────────────────────────────────────────────┘   ║
-║                                                                              ║
-║  ┌──────────────────────────────────────────────────────────────────────┐   ║
-║  │  Internal SMTP Relay → Manager inbox (HTML health report email)      │   ║
-║  └──────────────────────────────────────────────────────────────────────┘   ║
-║                                                                              ║
-║  INTERNET ACCESS: BLOCKED — all AI runs inside the network                   ║
+║              Engineer / Manager Workstations + Microsoft Teams               ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
 
@@ -219,13 +289,11 @@ Real data. Multi-user. Air-gapped AI. All inside your network.
 | | Demo | Production |
 |---|---|---|
 | Data | Fake data from `db_setup.py` | Sync agent from real VBR servers |
-| Sync | One-time setup | Scheduled every 1h |
-| Users | 1 | Multiple engineers + managers |
+| LLM | Groq free / LM Studio | AWS Bedrock (VPC) or LM Studio |
+| PCI protection | `pci_firewall.py` | `pci_firewall.py` + Bedrock Guardrails |
+| Teams bot | ngrok tunnel | Internal URL or reverse proxy |
 | Auth | None | Reverse proxy + Windows Auth |
-| LLM | LM Studio phi-4-mini (local) or Groq free | LM Studio (air-gapped, larger model) |
-| Hardware | Laptop | Dedicated VM |
-| DB credentials | `DB_SETUP_USER` postgres (setup) · `DB_USER` veeam_bot (runtime) | Same separation, both encrypted |
-| Port | localhost:5000 | Internal network, optionally behind nginx |
+| DB user | `veeam_bot` (read-only) | Same — read-only by design |
 
 ---
 
@@ -234,16 +302,18 @@ Real data. Multi-user. Air-gapped AI. All inside your network.
 ```
 BackupPulse/
 ├── app.py                    # Main Flask application
+├── config_final.env          # Config (gitignored — never commit)
 ├── config_final.env.example  # Config template
-├── encrypt_config.py         # One-time key encryption tool
-├── start-restart.py          # Start or restart app (stops existing process if running)
+├── encrypt_config.py         # Encrypt all secrets with Fernet
+├── pci_firewall.py           # Local PCI/PII data scrubber
+├── db_setup.py               # Create and seed demo database
+├── start-restart.py          # Start or restart app
 ├── stop.py                   # Stop app
-├── db_setup.py               # Create and seed demo database (connects as postgres superuser)
+├── sql_prompt.txt            # SQL generation instructions (cloud)
+├── sql_prompt_local.txt      # SQL generation instructions (local)
+├── system_prompt.txt         # Answer formatting rules (cloud)
+├── system_prompt_local.txt   # Answer formatting rules (local)
 ├── requirements.txt
-├── sql_prompt.txt            # SQL instructions (cloud)
-├── sql_prompt_local.txt      # SQL instructions (local)
-├── system_prompt.txt         # Answer formatting (cloud)
-├── system_prompt_local.txt   # Answer formatting (local)
 └── templates/
     ├── chat.html
     └── health_email.html
@@ -270,14 +340,14 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000)
 
 ---
 
-## Running 100% Locally
+## Running 100% Locally (Air-Gapped)
 
-1. Download [LM Studio](https://lmstudio.ai) → load `phi-4-mini-instruct` (Q4_K_M)
+1. Download LM Studio → load `phi-4-mini-instruct` (Q4_K_M)
 2. Enable Local Server (port 1234)
-3. Set in `config_final.env`: `MODEL_PROVIDER=lmstudio`
+3. Set `MODEL_PROVIDER=lmstudio` in `config_final.env`
 4. Restart the app
 
-Every question and answer stays on your machine.
+Every question and answer stays on your machine. Zero internet.
 
 ---
 
@@ -285,20 +355,23 @@ Every question and answer stays on your machine.
 
 | File | Contents |
 |---|---|
-| `logs/app.log` | Startup, LLM timings, DB queries |
+| `logs/app.log` | Startup, LLM timings, DB queries, provider switches |
 | `logs/errors.log` | Errors and warnings only |
-| `logs/qa.jsonl` | Every Q&A pair as JSON — useful for future LLM training |
+| `logs/qa.jsonl` | Every Q&A pair as JSON |
 
 ---
 
 ## Example Questions
 
 ```
-last 24 hours failed jobs
-repository capacity
-VMs missing backups
-how many restore points does WApp03 have?
-health report
+# Chatbot or Teams (@BackupPulseBot)
+Recent failed jobs
+Repository capacity
+SLA report for this week
+Objects not backed up in last 2 days
+How many servers do we have in backup?
+Check last backup for LApp04
+What is the restore point for WAgt03?
 ```
 
 ---
@@ -309,8 +382,13 @@ health report
 |---|---|
 | BackupPulse UI + AI + logging | ✅ This repo |
 | PostgreSQL schema | ✅ `db_setup.py` |
+| PCI firewall | ✅ `pci_firewall.py` |
+| Microsoft Teams bot | ✅ Outgoing webhook |
+| ServiceNow integration | ✅ Raise + resolve incidents |
+| AWS Bedrock + Guardrails | ✅ boto3, VPC-ready |
 | Sync agent (VBR → PostgreSQL) | ⚠️ Not included — environment-specific |
 | Authentication layer | ⚠️ Not included |
+| VPC endpoint setup | ⚠️ AWS infra — environment-specific |
 
 ---
 
