@@ -184,12 +184,57 @@ Teams user: @BackupPulseBot Recent failed jobs
 
 ## ServiceNow Integration
 
-BackupPulse can raise and resolve ServiceNow incidents directly from the health report.
+BackupPulse integrates with ServiceNow to raise and resolve incidents directly from the health report — no copy-pasting into ITSM tools.
 
-- One-click incident creation from failed job rows
-- Auto-populated with VBR server, job name, and failure message
-- Resolve incidents with resolution notes from the UI
-- Configurable offering ID per job type
+```
+Health Report UI
+     │
+     ├── [Raise Incident] button on each failed job row
+     │         ↓
+     │   POST /raise-incident
+     │   • Populates: short_description, description, assignment_group
+     │   • Uses TEAMS_SNOW_OFFERING for offering_id
+     │   • Returns INC number instantly
+     │
+     └── [Resolve Incident] button
+               ↓
+         POST /resolve-incident
+         • Accepts INC number + resolution notes
+         • Sets state = Resolved in ServiceNow
+         • Logs resolution to qa.jsonl
+```
+
+**What gets auto-populated in the incident:**
+
+| Field | Value |
+|---|---|
+| Short description | Job name + failed object name |
+| Description | Full failure message from Veeam |
+| Assignment group | `SNOW_ASSIGNMENT_GROUP` from config |
+| Offering ID | `TEAMS_SNOW_OFFERING` from config |
+
+**Setup:**
+1. ServiceNow developer instance — free at developer.servicenow.com
+2. Add to `config_final.env`:
+   ```
+   SNOW_INSTANCE=https://dev123456.service-now.com
+   SNOW_USER=admin
+   SNOW_PASS=your-password
+   SNOW_ASSIGNMENT_GROUP=Backup Operations
+   TEAMS_SNOW_OFFERING=123
+   ```
+3. Run `python encrypt_config.py` — encrypts `SNOW_PASS` immediately
+4. Restart app — Raise/Resolve buttons appear in health report
+
+**Config keys:**
+
+| Key | Purpose |
+|---|---|
+| `SNOW_INSTANCE` | Your ServiceNow instance URL |
+| `SNOW_USER` | API username |
+| `SNOW_PASS` | API password (auto-encrypted) |
+| `SNOW_ASSIGNMENT_GROUP` | Team incidents are assigned to |
+| `TEAMS_SNOW_OFFERING` | Offering/catalog ID for incident category |
 
 ---
 
