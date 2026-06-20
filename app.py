@@ -1042,7 +1042,7 @@ def resolve_incident_route():
     log.info(f"[ROUTE /resolve-incident] {inc_number} code={resolution_code!r}")
     try:
         inc_number, description = resolve_snow_incident(inc_number, resolution_code, resolution_notes)
-        _TEST_KEYWORDS = ("test im", "test incident", "test only", "testing", "ignore", "dummy", "fake")
+        _TEST_KEYWORDS = ("test", "testing", "ignore", "dummy", "fake", "sample", "trial")
         is_test = any(kw in resolution_notes.lower() for kw in _TEST_KEYWORDS)
         if not is_test:
             _log_incident_resolution(description or inc_number, resolution_notes)
