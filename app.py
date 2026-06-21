@@ -718,7 +718,7 @@ def process_question(question):
             log.warning("[CHAT] LLM returned None/empty for SQL generation")
 
         if not reply:
-            sql = re.sub(r"```sql|```", "", raw_sql).strip()
+            sql = sql_clean
             if not sql.upper().startswith("SELECT"):
                 m = re.search(r"(SELECT\b.+)", sql, re.IGNORECASE | re.DOTALL)
                 sql = m.group(1).strip() if m else ""
@@ -736,18 +736,19 @@ def process_question(question):
                     log.info(f"[CHAT] query returned 0 rows — {round(time.perf_counter()-t0,3)}s")
                     reply = "I checked the database and there's nothing to report here — either everything looks clean or this data isn't available. You might want to check with your Backup Administrator."
                 else:
-                    past_fix = ""
-                    for row in rows[:5]:
+                    # Collect unique past resolutions across ALL rows
+                    seen_fixes, past_fixes = set(), []
+                    for row in rows:
                         err = row.get("failure_message", "")
-                        if err:
+                        if err and err not in seen_fixes:
+                            seen_fixes.add(err)
                             match = _find_past_resolution(err)
                             if match:
-                                past_fix = match
-                                break
+                                past_fixes.append(match)
                     explain_prompt = (
                         "[QUERY RESULTS]\n" + sql + "\n" + str(rows[:50])
                         + "\n\n[USER QUESTION]\n" + question
-                        + ("\n\n" + past_fix if past_fix else "")
+                        + ("\n\n" + "\n".join(past_fixes) if past_fixes else "")
                     )
                     reply = call_llm(explain_prompt, load_system_prompt(), max_tokens=800)
                     log.info(f"[CHAT] cloud explain done rows={len(rows)} — {round(time.perf_counter()-t0,3)}s")
@@ -789,34 +790,12 @@ def generate_health_email(failed_24h, critical_repos, long_running, zero_data, r
 
 
 def _fetch_health_data():
-    failed_24h = run_query("""
-        SELECT MAX(backup_date) AS backup_date, vbr_server, job_name, failed_object_name,
-               MAX(failure_message) AS failure_message
-        FROM failed_jobs_daily
-        WHERE backup_date >= CURRENT_DATE - INTERVAL '1 day'
-        GROUP BY vbr_server, job_name, failed_object_name
-        ORDER BY vbr_server, job_name, failed_object_name
-    """)
-    critical_repos = run_query("""
-        SELECT repo_name, sobr_name, repo_type, vbr_server,
-               total_tb, used_tb, free_tb, used_pct
-        FROM repositories
-        WHERE used_pct >= 90
-        ORDER BY used_pct DESC
-    """)
-    long_running = run_query("""
-        SELECT job_name, backup_type, vbr_server, start_time, duration_hours, alert_level
-        FROM long_running_jobs
-        ORDER BY duration_hours DESC
-        LIMIT 10
-    """)
-    zero_data = run_query("""
-        SELECT backup_date, job_name, vbr_server, vm_name, read_mb, transferred_kb, vm_start_time
-        FROM zero_size_jobs
-        WHERE backup_date >= CURRENT_DATE - 7
-        ORDER BY vm_start_time DESC
-        LIMIT 20
-    """)
+    from health_queries import (FAILED_JOBS_24H, CRITICAL_REPOS,
+                                LONG_RUNNING_JOBS, ZERO_SIZE_JOBS)
+    failed_24h     = run_query(FAILED_JOBS_24H)
+    critical_repos = run_query(CRITICAL_REPOS)
+    long_running   = run_query(LONG_RUNNING_JOBS)
+    zero_data      = run_query(ZERO_SIZE_JOBS)
     return failed_24h, critical_repos, long_running, zero_data
 
 

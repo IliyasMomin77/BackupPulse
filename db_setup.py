@@ -114,7 +114,8 @@ JOB_DEFS = [
     ("Linux_VM_Job",     LNX_VMS,  "VM Backup",   "VBR2", 40,  6.0),
     ("Prod_Agent_Job",   WIN_AGTS, "Agent",        "VBR1", 40,  6.0),
     ("Linux_Agent_Job",  LNX_AGTS, "Agent",        "VBR2", 45,  5.0),
-    ("Prod_File_Job",    FILES,    "File Backup",  "VBR3", 70, 30.0),
+    ("Prod_File_Job",    FILES,    "File Backup",  "VBR3",  70, 30.0),
+    ("DR_Full_Backup",   [v for v in WIN_VMS if v not in BAD_OBJECTS],  "Full Backup",  "VBR1", 510, 80.0),  # ~8.5h — triggers Warning, healthy VMs only
 ]
 
 OBJ_TO_JOB = {}

@@ -98,17 +98,29 @@ Columns:
   size_gb              NUMERIC    — size of this restore point in GB
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TABLE: long_running_jobs
+LONG-RUNNING JOBS (use job_sessions, not a separate table)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Purpose: Jobs that ran significantly longer than expected — performance alerts.
+Query job_sessions.duration_minutes to find long-running jobs.
+Thresholds: Warning = over 6 hours (360 min), Critical = 24 hours or more (1440 min).
+job_sessions uses start_time (TIMESTAMP) for time filters, not backup_date.
+  "Recent" or "last 24h" → start_time >= NOW() - INTERVAL '1 day'
+  "Today"                → start_time >= CURRENT_DATE
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE: zero_size_jobs
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Purpose: Backup jobs that completed but transferred zero data — silent failure indicator.
 
 Columns:
-  job_name         TEXT      — name of the job
-  backup_type      TEXT      — type of backup
+  backup_date      DATE      — date the job ran
+  job_name         TEXT      — name of the backup job
   vbr_server       TEXT      — which VBR server
-  start_time       TIMESTAMP — when the job started
-  duration_hours   NUMERIC   — how many hours the job ran
-  alert_level      TEXT      — severity: 'Warning' or 'Critical'
+  vm_name          TEXT      — the object that produced zero data
+  read_mb          NUMERIC   — data read (0 or near 0)
+  transferred_kb   NUMERIC   — data transferred (0 or near 0)
+  vm_start_time    TIMESTAMP — when the job started
+
+"Recent" zero-size jobs → backup_date >= CURRENT_DATE - 1
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SLA DEFINITION
