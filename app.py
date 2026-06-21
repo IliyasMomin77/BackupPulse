@@ -1168,6 +1168,9 @@ def send_healthcheck():
                 s.sendmail(EMAIL_FROM, [to_addr], msg.as_string())
 
         log.info(f"[ROUTE /send-healthcheck] sent to={to_addr}")
+        _remarks.clear()
+        _save_remarks(_remarks)
+        log.info("[ROUTE /send-healthcheck] remarks cleared after send")
         return jsonify({"success": True, "message": f"Report sent to {to_addr}"})
     except Exception as e:
         log.error(f"[ROUTE /send-healthcheck] error={e}")
