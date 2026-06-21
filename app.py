@@ -506,7 +506,7 @@ def _format_rows(question, rows):
     return "\n".join(lines)
 
 
-def _log_qa(question, answer, duration, provider):
+def _log_qa(question, answer, duration, provider, sql=None, row_count=None):
     entry = {
         "ts":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "question": question,
@@ -514,6 +514,10 @@ def _log_qa(question, answer, duration, provider):
         "provider": provider,
         "duration": duration,
     }
+    if sql:
+        entry["sql"] = sql
+    if row_count is not None:
+        entry["row_count"] = row_count
     try:
         qa_file = os.path.join(_log_dir, 'qa.jsonl')
         with open(qa_file, 'a', encoding='utf-8') as f:
@@ -608,6 +612,8 @@ def process_question(question):
     t0 = time.perf_counter()
     log.info(f"[CHAT] question={question!r}")
     reply = ""
+    sql   = ""
+    rows  = []
 
     # Greetings — instant, no LLM call
     if _INSTANT_REPLY.match(question):
@@ -746,7 +752,8 @@ def process_question(question):
                     reply = call_llm(explain_prompt, load_system_prompt(), max_tokens=800)
                     log.info(f"[CHAT] cloud explain done rows={len(rows)} — {round(time.perf_counter()-t0,3)}s")
 
-    _log_qa(question, reply, round(time.perf_counter() - t0, 3), MODEL_PROVIDER)
+    _log_qa(question, reply, round(time.perf_counter() - t0, 3), MODEL_PROVIDER,
+            sql=sql or None, row_count=len(rows) if rows else None)
     return reply
 
 

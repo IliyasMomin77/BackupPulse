@@ -25,12 +25,17 @@ if pid:
 else:
     print("App not running. Starting...")
 
-script   = os.path.join(os.path.dirname(__file__), 'app.py')
-logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
+base     = os.path.dirname(os.path.abspath(__file__))
+# pythonw.exe = windowless Python — no console window, stdout/stderr still captured to log file
+venv_pyw = os.path.join(base, 'venv', 'Scripts', 'pythonw.exe')
+venv_py  = os.path.join(base, 'venv', 'Scripts', 'python.exe')
+python   = venv_pyw if os.path.exists(venv_pyw) else (venv_py if os.path.exists(venv_py) else sys.executable)
+script   = os.path.join(base, 'app.py')
+logs_dir = os.path.join(base, 'logs')
 os.makedirs(logs_dir, exist_ok=True)
 log      = open(os.path.join(logs_dir, 'app.log'), 'a')
 subprocess.Popen(
-    [sys.executable, script],
+    [python, script],
     stdout=log,
     stderr=log,
     stdin=subprocess.DEVNULL,
