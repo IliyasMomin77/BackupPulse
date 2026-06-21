@@ -163,7 +163,7 @@ def fail_msg_for(obj):
 # ── Repositories (all below 90%) ───────────────────────────────────────────────
 REPO_DEFS = [
     ("PROD-REPO-01", None, "Repository", 20480, 14336),  # 70% — VBR1
-    ("PROD-REPO-02", None, "Repository", 30720, 22528),  # 73% — VBR2
+    ("PROD-REPO-02", None, "Repository", 30720, 28877),  # 94% — VBR2 (critical)
     ("DR-REPO-01",   None, "Repository", 20480, 10240),  # 50% — VBR3
     ("OFFSITE-REPO", None, "Repository", 15360, 12288),  # 80% — VBR1
     ("TAPE-ARCHIVE", None, "Repository", 102400,61440),  # 60% — VBR2
@@ -295,7 +295,7 @@ def insert_repositories(cur):
              round(total_gb/1024,2), round(used_gb/1024,2),
              round(free_gb/1024,2), pct),
         )
-    print(f"  Repositories: {len(REPO_DEFS)} rows (all below 90%)")
+    print(f"  Repositories: {len(REPO_DEFS)} rows (PROD-REPO-02 at 94% — critical)")
 
 
 def insert_protected_vms(cur):
