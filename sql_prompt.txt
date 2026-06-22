@@ -131,16 +131,24 @@ Source of truth: protected_vms.last_successful_backup (TIMESTAMP).
 A job that fails but is retried and succeeds gets its last_successful_backup updated — it IS in SLA.
 A job that keeps failing with no successful retry has an old last_successful_backup — it is an SLA miss.
 
-DO NOT use failed_jobs_daily to calculate SLA. Failure events followed by a successful retry
-should NOT count as SLA misses — failed_jobs_daily records every failure attempt regardless of retries.
+SLA has two calculation modes depending on time period:
 
-SLA is calculated from protected_vms alone:
-  in_sla    = DISTINCT objects where last_successful_backup >= CURRENT_DATE - N
-  sla_miss  = DISTINCT objects where last_successful_backup < CURRENT_DATE - N OR last_successful_backup IS NULL
-  sla_pct   = ROUND(100.0 * in_sla / NULLIF(total_protected, 0), 1)
+TODAY's SLA — use failed_jobs_daily:
+  total_protected = COUNT(DISTINCT object_name) FROM protected_vms
+  failed_today    = COUNT(DISTINCT failed_object_name) FROM failed_jobs_daily WHERE backup_date = CURRENT_DATE
+  in_sla          = total_protected - failed_today
+  sla_pct         = ROUND(100.0 * in_sla / NULLIF(total_protected, 0), 1)
+
+WEEKLY / MONTHLY SLA — use protected_vms.last_successful_backup:
+  in_sla   = DISTINCT objects where last_successful_backup >= CURRENT_DATE - N
+  sla_miss = DISTINCT objects where last_successful_backup < CURRENT_DATE - N OR last_successful_backup IS NULL
+  sla_pct  = ROUND(100.0 * in_sla / NULLIF(total_protected, 0), 1)
 
 SLA query must return exactly ONE aggregate row. Columns: total_protected, in_sla, sla_missed, sla_pct.
 Never GROUP BY object — the entire result is a single summary.
+Time period: "today" = use failed_jobs_daily with backup_date = CURRENT_DATE.
+             "this week" or default = last_successful_backup >= CURRENT_DATE - 7.
+             "this month" = last_successful_backup >= CURRENT_DATE - 30.
 
 STALE / OVERDUE BACKUPS — different from SLA:
 When user asks "which objects haven't been backed up in X days", "overdue backups", "stale backups",

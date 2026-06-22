@@ -644,6 +644,8 @@ def process_question(question):
                 log.warning(f"[CHAT] blocked write SQL attempt — {sql[:80]}")
                 reply = "I can only read backup data. Write operations are not allowed."
             else:
+                if re.search(r'\bSELECT\s+DISTINCT\b', sql, re.IGNORECASE):
+                    sql = re.sub(r'\bSELECT\s+DISTINCT\b', 'SELECT', sql, count=1, flags=re.IGNORECASE)
                 rows = run_query(sql)
                 if not rows:
                     log.info(f"[CHAT] query returned 0 rows — {round(time.perf_counter()-t0,3)}s")
@@ -1207,7 +1209,16 @@ def _process_teams_message(text):
         fmt_hint = LAST_BACKUP["format"]
 
     elif re.search(r'\bsla\b|\bcompliance\b|\bsuccess\s+rate\b', q):
-        intent  = SLA_REPORT["intent"]
+        if re.search(r'\btoday\b|\blast\s+24\b', q):
+            window = "today only — use backup_date = CURRENT_DATE"
+            days = 1
+        elif re.search(r'\bthis\s+week\b|\b7\s+day\b|\bweek\b', q):
+            window = "last 7 days — use backup_date >= CURRENT_DATE - 7"
+            days = 7
+        else:
+            window = "last 7 days — use backup_date >= CURRENT_DATE - 7"
+            days = 7
+        intent   = SLA_REPORT["intent"] + f" Time period: {window}."
         fmt_hint = SLA_REPORT["format"]
 
     elif re.search(r'\bhow\s+many\b.{0,30}\b(server|vm|agent|object|protected)\b'
@@ -1248,7 +1259,7 @@ def _process_teams_message(text):
         if not rows:
             return "No data found for that query."
 
-        # Step 3: Build data — Python pre-calculates facts for failure queries
+        # Step 3: Build data — Python pre-calculates facts so LLM only formats
         keys = list(rows[0].keys())
         data_lines = []
         if "failed_object_name" in keys:
@@ -1258,6 +1269,17 @@ def _process_teams_message(text):
                 f"[FACTS — use these exact numbers]\n"
                 f"Jobs failed: {len(unique_jobs)} ({', '.join(unique_jobs)})\n"
                 f"Objects affected: {len(unique_objects)} ({', '.join(unique_objects)})"
+            )
+        elif "sla_pct" in keys or "total_protected" in keys:
+            r0 = rows[0]
+            total  = int(r0.get("total_protected") or 0)
+            failed = int(r0.get("total_failed") or 0)
+            sla    = float(r0.get("sla_pct") or 0)
+            emoji  = "✅" if sla >= 95 else "⚠️" if sla >= 85 else "🔴"
+            data_lines.append(
+                f"[FACTS — use these exact numbers]\n"
+                f"SLA: {sla}% {emoji}\n"
+                f"Protected: {total} | Successful: {total - failed} | Failed: {failed}"
             )
         data_lines.append(", ".join(keys))
         for r in rows[:40]:
