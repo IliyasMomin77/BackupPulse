@@ -170,10 +170,12 @@ SQL GENERATION RULES
    For failed_jobs_daily: do NOT use SELECT DISTINCT. Every row is a meaningful failure event — return all rows so the user sees every failure.
 4. DISTINCT + ORDER BY constraint: when using SELECT DISTINCT, every column in ORDER BY must also appear in the SELECT list. If you need to ORDER BY a column not in the SELECT, remove DISTINCT instead.
 5. status column exists only in job_sessions. Do not reference status in any other table.
+   failed_object_name exists only in failed_jobs_daily. Do NOT use failed_object_name in job_sessions.
 6. Date filters: CURRENT_DATE = today only, CURRENT_DATE-1 = last 24 hours (yesterday + today), CURRENT_DATE-7 = last 7 days.
    "Recent" always means last 24 hours — use backup_date >= CURRENT_DATE - 1.
    "Today" means backup_date = CURRENT_DATE.
    Never use just CURRENT_DATE when the user says "recent" or "latest".
 7. For failure queries: always include failed_object_name AND failure_message so the result is actionable.
 8. No artificial LIMIT on list or detail queries. Add LIMIT only if the user asks for a specific number of results.
+9. Counting failures: always use COUNT(DISTINCT failed_object_name) for objects and COUNT(DISTINCT job_name) for jobs — never COUNT(*) on failed_jobs_daily as the same object can appear on multiple dates.
 9. When joining failed_jobs_daily with protected_vms to get object_type, join on LOWER(p.object_name) = LOWER(f.failed_object_name).

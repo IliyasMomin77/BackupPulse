@@ -102,7 +102,8 @@ def _find_past_resolution(error_text: str) -> str | None:
     """Scan incidents.jsonl for a past resolution matching the error. Returns suggestion string or None."""
     if not error_text or not os.path.exists(_INCIDENTS_LOG):
         return None
-    keywords = [w for w in error_text.lower().split() if len(w) > 4]
+    keywords = [re.sub(r'[.,;:()!?]', '', w) for w in error_text.lower().split()]
+    keywords = [w for w in keywords if len(w) > 4]
     best, best_score = None, 0
     try:
         with open(_INCIDENTS_LOG, encoding='utf-8') as f:
@@ -124,6 +125,37 @@ def _find_past_resolution(error_text: str) -> str | None:
                 f"Resolved on: {best.get('resolved_at','')}\n"
                 f"Suggest this resolution if applicable.\n")
     return None
+
+
+def _clean_resolution(raw: str) -> str:
+    """LLM rewrites a raw resolution note into clean English — one sentence."""
+    try:
+        cleaned = call_llm(
+            f"Rewrite this in clear professional English, one sentence, fix spelling and grammar: {raw}",
+            max_tokens=80
+        )
+        return cleaned.strip().rstrip('.')  + '.' if cleaned else raw
+    except Exception:
+        return raw
+
+
+def _inject_past_fixes(reply: str, err_to_fix: dict) -> str:
+    """Python injects LLM-cleaned past fixes right after the matching error line."""
+    if not err_to_fix:
+        return reply
+    lines = reply.split('\n')
+    result = []
+    for line in lines:
+        result.append(line)
+        line_lower = line.lower()
+        for err, cleaned_fix in err_to_fix.items():
+            # LLM abbreviates errors — use specific words (>5 chars), 1 match is enough
+            keywords = [w.strip('.,;:()') for w in err.lower().split() if len(w.strip('.,;:()')) > 5]
+            if keywords and any(kw in line_lower for kw in keywords):
+                result.append(f"  → Past fix: {cleaned_fix}")
+                break
+    return '\n'.join(result)
+
 
 # ============================================================
 # CONFIG
@@ -582,7 +614,7 @@ def process_question(question):
             "If it is a greeting or general knowledge question (not about backup data), "
             "reply with DIRECT: followed by a brief answer."
         )
-        raw_sql = call_llm(sql_user, load_sql_prompt(), max_tokens=300)
+        raw_sql = call_llm(sql_user, load_sql_prompt(), max_tokens=500)
         sql_clean = re.sub(r"```sql|```", "", raw_sql).strip()
         if sql_clean.upper().startswith("DIRECT:"):
             direct_body = sql_clean[7:].strip()
@@ -617,26 +649,28 @@ def process_question(question):
                     log.info(f"[CHAT] query returned 0 rows — {round(time.perf_counter()-t0,3)}s")
                     reply = "I checked the database and there's nothing to report here — either everything looks clean or this data isn't available. You might want to check with your Backup Administrator."
                 else:
-                    # Map each unique error to its past resolution
+                    # Find past resolutions and clean them up with LLM
                     err_to_fix = {}
                     for row in rows:
                         err = row.get("failure_message", "")
                         if err and err not in err_to_fix:
                             match = _find_past_resolution(err)
                             if match:
-                                err_to_fix[err] = match
-                    # Build inline resolution hints so LLM knows which fix belongs to which error
-                    fix_hints = ""
-                    if err_to_fix:
-                        fix_hints = "\n\n[PAST RESOLUTIONS — show each fix directly after the matching error line]\n"
-                        for err, fix in err_to_fix.items():
-                            fix_hints += f"Error: {err[:80]}\n{fix}\n"
+                                raw_res = next(
+                                    (l.replace("How it was resolved:", "").strip()
+                                     for l in match.split('\n') if l.startswith("How it was resolved:")),
+                                    ""
+                                )
+                                if raw_res:
+                                    err_to_fix[err] = _clean_resolution(raw_res)
+                    # LLM formats errors only — Python handles fix placement
                     explain_prompt = (
                         "[QUERY RESULTS]\n" + sql + "\n" + str(rows[:50])
                         + "\n\n[USER QUESTION]\n" + question
-                        + fix_hints
                     )
                     reply = call_llm(explain_prompt, load_system_prompt(), max_tokens=800)
+                    # Python injects cleaned fixes right after matching error lines
+                    reply = _inject_past_fixes(reply, err_to_fix)
                     log.info(f"[CHAT] cloud explain done rows={len(rows)} — {round(time.perf_counter()-t0,3)}s")
 
     _log_qa(question, reply, round(time.perf_counter() - t0, 3), MODEL_PROVIDER,
@@ -1109,121 +1143,6 @@ def _extract_machine(text):
     return with_digit[0] if with_digit else (candidates[0] if candidates else None)
 
 
-def _teams_check_protected(machine):
-    rows = _run_query_params(
-        "SELECT object_name, object_type, job_name, vbr_server, last_successful_backup "
-        "FROM protected_vms WHERE LOWER(object_name) = LOWER(%s) LIMIT 1",
-        (machine,)
-    )
-    if not rows:
-        return (
-            f"⚠️ **{machine}** is **not found** in the backup system.\n\n"
-            f"To get it added, raise a ServiceNow request:\n"
-            f"**Offering #{TEAMS_SNOW_OFFERING} — Add Server to Backup**\n\n"
-            f"Provide the server name, OS type, and estimated data size. "
-            f"The backup team will configure it within 2 business days."
-        )
-    r = rows[0]
-    last = r.get("last_successful_backup")
-    last_str = last.strftime("%Y-%m-%d %H:%M") if last else "No record"
-    return (
-        f"✅ **{r['object_name']}** is protected.\n"
-        f"- **Type:** {r.get('object_type', 'VM')}\n"
-        f"- **Job:** {r.get('job_name', '—')}\n"
-        f"- **VBR Server:** {r.get('vbr_server', '—')}\n"
-        f"- **Last Successful Backup:** {last_str}"
-    )
-
-
-def _teams_last_backup(machine):
-    protected = _run_query_params(
-        "SELECT last_successful_backup FROM protected_vms "
-        "WHERE LOWER(object_name) = LOWER(%s) LIMIT 1",
-        (machine,)
-    )
-    if not protected:
-        return (
-            f"⚠️ **{machine}** is not registered in the backup system.\n"
-            f"Raise SNOW Offering #{TEAMS_SNOW_OFFERING} to get it added."
-        )
-    last = protected[0].get("last_successful_backup")
-    last_str = last.strftime("%Y-%m-%d %H:%M") if last else "No successful backup on record"
-
-    failures = _run_query_params(
-        "SELECT backup_date, job_name, failure_message FROM failed_jobs_daily "
-        "WHERE LOWER(failed_object_name) = LOWER(%s) "
-        "ORDER BY backup_date DESC LIMIT 3",
-        (machine,)
-    )
-    lines = [
-        f"**Backup status for {machine}:**",
-        f"- Last successful backup: **{last_str}**",
-    ]
-    if failures:
-        lines.append("\nRecent failures:")
-        for r in failures:
-            msg = (r.get("failure_message") or "")[:80]
-            lines.append(f"  ❌ {r['backup_date']} — {r['job_name']}: {msg}")
-    else:
-        lines.append("- No recent failures ✅")
-    return "\n".join(lines)
-
-
-
-def _teams_list_vms(pattern):
-    if pattern:
-        like = pattern.replace("*", "%")
-        rows = _run_query_params(
-            "SELECT object_name, object_type, job_name, vbr_server FROM protected_vms "
-            "WHERE LOWER(object_name) LIKE LOWER(%s) ORDER BY object_name LIMIT 30",
-            (like,)
-        )
-    else:
-        rows = _run_query_params(
-            "SELECT object_name, object_type, job_name, vbr_server FROM protected_vms "
-            "ORDER BY object_name LIMIT 30"
-        )
-    if not rows:
-        pat_str = f" matching *{pattern}*" if pattern else ""
-        return f"No protected VMs found{pat_str}."
-    pat_str = f" matching *{pattern}*" if pattern else ""
-    lines = [f"**Protected VMs{pat_str} ({len(rows)}):**\n"]
-    for r in rows:
-        lines.append(f"  • **{r['object_name']}** ({r.get('object_type','VM')}) — {r.get('job_name','')}")
-    return "\n".join(lines)
-
-
-def _teams_sla_report():
-    rows = _run_query_params(
-        """
-        SELECT
-            COUNT(DISTINCT p.object_name)                                         AS total_protected,
-            COUNT(DISTINCT f.failed_object_name)                                  AS total_failed,
-            ROUND(100.0 * (COUNT(DISTINCT p.object_name)
-                         - COUNT(DISTINCT f.failed_object_name))
-                  / NULLIF(COUNT(DISTINCT p.object_name), 0), 1)                 AS sla_pct
-        FROM protected_vms p
-        LEFT JOIN failed_jobs_daily f
-            ON  LOWER(p.object_name) = LOWER(f.failed_object_name)
-            AND f.backup_date >= CURRENT_DATE - 7
-        """
-    )
-    if not rows:
-        return "Unable to retrieve SLA data right now."
-    r = rows[0]
-    total  = int(r.get("total_protected") or 0)
-    failed = int(r.get("total_failed") or 0)
-    sla    = float(r.get("sla_pct") or 0)
-    emoji  = "✅" if sla >= 95 else "⚠️" if sla >= 85 else "🔴"
-    return (
-        f"**{emoji} Backup SLA Report — Last 7 Days**\n\n"
-        f"- Protected objects: **{total}**\n"
-        f"- Successful: **{total - failed}**\n"
-        f"- Failed: **{failed}**\n"
-        f"- SLA: **{sla}%**"
-    )
-
-
 def _teams_guidance(machine):
     name = f"**{machine}**" if machine else "this server"
     return (
@@ -1238,91 +1157,130 @@ def _teams_guidance(machine):
 
 def _teams_help():
     return (
-        "👋 **BackupPulse Bot** — here's what I can do:\n\n"
+        "👋 **BackupPulse Bot** — I can answer:\n\n"
         "- `is WApp01 in backup?` — check if a server is protected\n"
         "- `last backup of WAgt03` — last backup date and recent failures\n"
-        "- `list VMs starting with web*` — find protected servers by name\n"
-        "- `SLA report this week` — backup success rate for last 7 days\n"
+        "- `how many servers are protected?` — protection count\n"
+        "- `recent failed jobs` — failures in last 24 hours\n"
+        "- `SLA report` — backup success rate for last 7 days\n"
         "- `how to add WServer01 to backup` — onboarding guide\n\n"
-        "_You can also ask free-form backup questions and I'll query the database._"
+        "_For detailed analysis and reports, use the BackupPulse dashboard._"
     )
 
 
 def _process_teams_message(text):
+    from teams_queries import (SERVER_STATUS, LAST_BACKUP, PROTECTED_COUNT,
+                               FAILED_JOBS, SLA_REPORT, LIST_VMS, GUIDANCE)
     q = text.lower().strip()
 
-    # Help / greeting / empty /backuppulse
+    # Help / greeting
     if re.match(r'^(hi|hello|help|hey|\?)\s*$', q) or not q:
         return _teams_help()
 
-    # "is X in backup?" / "is X protected?" / "backup status of X"
-    if re.search(r'\b(is|check|was)\b.{0,40}\b(in backup|protected|backed up)\b'
-                 r'|\bbackup\s+status\s+of\b', q):
-        machine = _extract_machine(text)
-        return _teams_check_protected(machine) if machine else \
-               "Please mention the server name. Example: *is WApp01 in backup?*"
-
-    # "last backup of X" / "recent backup X" / "backup history X"
-    if re.search(r'\b(last|recent|latest)\b.{0,20}\bbackup\b'
-                 r'|\bbackup.{0,20}\b(history|status)\b', q):
-        machine = _extract_machine(text)
-        return _teams_last_backup(machine) if machine else \
-               "Please mention the server name. Example: *last backup of WApp01*"
-
-    # "add X to backup" / "how to get X backed up" / "not in backup"
+    # Onboarding guidance — no DB query
     if re.search(r'\b(add|get|put|register|onboard|enrol)\b.{0,40}\bbackup\b'
                  r'|\bnot in backup\b', q):
         return _teams_guidance(_extract_machine(text))
 
-    # All data queries — Groq generates SQL, executes, Groq formats naturally
+    # Scope gate
+    if not re.search(
+        r'\b(fail|failed|failure|protected|protection|backup|sla|compliance|'
+        r'how many|how much|count|server|vm|agent|object|status|'
+        r'last|recent|latest|today|24|yesterday|list|all)\b', q, re.IGNORECASE
+    ):
+        return "I handle backup questions only. For detailed analysis use the **BackupPulse dashboard**."
+
+    # Detect intent → pick query context + format hint from teams_queries.py
+    machine = _extract_machine(text)
+    if re.search(r'\b(is|check|was)\b.{0,40}\b(in backup|protected|backed up)\b'
+                 r'|\bbackup\s+status\s+of\b', q):
+        if not machine:
+            return "Please mention the server name. Example: *is WApp01 in backup?*"
+        intent = SERVER_STATUS["intent"] + f" Server name: {machine}"
+        fmt_hint = SERVER_STATUS["format"]
+
+    elif re.search(r'\b(last|recent|latest)\b.{0,20}\bbackup\b'
+                   r'|\bbackup.{0,20}\b(history|status|detail)\b', q):
+        if not machine:
+            return "Please mention the server name. Example: *last backup of WApp01*"
+        intent = LAST_BACKUP["intent"] + f" Server name: {machine}"
+        fmt_hint = LAST_BACKUP["format"]
+
+    elif re.search(r'\bsla\b|\bcompliance\b|\bsuccess\s+rate\b', q):
+        intent  = SLA_REPORT["intent"]
+        fmt_hint = SLA_REPORT["format"]
+
+    elif re.search(r'\bhow\s+many\b.{0,30}\b(server|vm|agent|object|protected)\b'
+                   r'|\b(count|total)\b.{0,30}\b(server|vm|protected)\b'
+                   r'|\bhow\s+many\s+are\s+protected\b', q):
+        intent  = PROTECTED_COUNT["intent"]
+        fmt_hint = PROTECTED_COUNT["format"]
+
+    elif re.search(r'\b(fail|failed|failure|job)\b', q):
+        intent  = FAILED_JOBS["intent"]
+        fmt_hint = FAILED_JOBS["format"]
+
+    elif re.search(r'\b(list|all|show)\b.{0,30}\b(server|vm|agent|object|protected)\b', q):
+        pat = machine or ""
+        intent  = LIST_VMS["intent"] + (f" Filter by name pattern: {pat}" if pat else " Return all.")
+        fmt_hint = LIST_VMS["format"].replace("<pattern>", pat or "all")
+
+    else:
+        intent   = "Answer the user's backup-related question using the relevant tables."
+        fmt_hint = "Answer directly, one line per item, bold key values."
+
+    # Build SQL prompt with intent context
+    sql_system = f"[QUERY INTENT]\n{intent}\n\n" + load_sql_prompt()
+
     try:
-        # Step 1: Groq generates SQL
-        raw = _teams_groq(text, system=load_sql_prompt(), max_tokens=300)
+        # Step 1: LLM generates SQL with intent context
+        raw = _teams_groq(text, system=sql_system, max_tokens=400)
         sql_clean = re.sub(r"```sql|```", "", raw or "").strip()
         m = re.search(r"(SELECT\b[^;]+;?)", sql_clean, re.IGNORECASE | re.DOTALL)
         sql_clean = m.group(1).strip() if m else ""
         if not sql_clean:
             return _teams_help()
+        if re.search(r'\bSELECT\s+DISTINCT\b', sql_clean, re.IGNORECASE):
+            sql_clean = re.sub(r'\bSELECT\s+DISTINCT\b', 'SELECT', sql_clean, count=1, flags=re.IGNORECASE)
 
         # Step 2: Execute SQL
         rows = run_query(sql_clean)
         if not rows:
             return "No data found for that query."
 
-        # Step 3: Groq formats results as natural language
+        # Step 3: Build data — Python pre-calculates facts for failure queries
         keys = list(rows[0].keys())
-        data_lines = [", ".join(keys)]
+        data_lines = []
+        if "failed_object_name" in keys:
+            unique_objects = sorted({r.get("failed_object_name", "") for r in rows if r.get("failed_object_name")})
+            unique_jobs    = sorted({r.get("job_name", "")            for r in rows if r.get("job_name")})
+            data_lines.append(
+                f"[FACTS — use these exact numbers]\n"
+                f"Jobs failed: {len(unique_jobs)} ({', '.join(unique_jobs)})\n"
+                f"Objects affected: {len(unique_objects)} ({', '.join(unique_objects)})"
+            )
+        data_lines.append(", ".join(keys))
         for r in rows[:40]:
             data_lines.append(", ".join(str(r.get(k, "")) for k in keys))
         if len(rows) > 40:
             data_lines.append(f"({len(rows) - 40} more rows not shown)")
         data_text = "\n".join(data_lines)
 
+        # Step 4: LLM formats with intent-specific format hint
         fmt_system = (
-            "You are BackupPulse, a Veeam Backup & Replication assistant in Microsoft Teams.\n"
-            "You receive a user question and raw database results. Write a natural, conversational reply — "
-            "like a helpful colleague, not a system dump.\n\n"
-            "TONE & STYLE:\n"
-            "- Answer the question directly. Lead with the key finding.\n"
-            "- Speak naturally: 'Yes, the last backup for LApp04 was successful on 2026-06-15 at 13:56' not a table.\n"
-            "- No preamble ('Sure!', 'Great question!', 'Based on the data...'). Get straight to the point.\n"
-            "- No markdown headers (##). Use **bold** for server names, dates, and key numbers.\n"
-            "- Keep under 250 words.\n\n"
-            "CONTENT RULES:\n"
-            "- Backup status: ✅ success/protected, ❌ failed/not found, ⚠️ warning or missing data.\n"
-            "- 'Was the backup good/successful?' → check last_successful_backup timestamp. If recent, say yes with the date.\n"
-            "- For lists: group by type (VMs / Agents / File Servers) with bullet points. Show server names clearly.\n"
-            "- For counts: state the number first, then break down by type if available.\n"
-            "- For SLA: state the percentage prominently, then protected vs failed counts.\n"
-            "- For storage: mention used% and free space per repo.\n"
-            "- For failures: name the server, job, and give a brief reason.\n"
-            "- Timestamps: format as 'YYYY-MM-DD HH:MM' — no seconds.\n"
-            "- If result is empty: say what wasn't found and suggest checking the server name spelling."
+            "You are BackupPulse, a Veeam Backup & Replication assistant in Microsoft Teams.\n\n"
+            "CRITICAL: Use ONLY data explicitly in 'Database results'. Never invent names, counts, or errors.\n\n"
+            f"FORMAT FOR THIS QUERY TYPE:\n{fmt_hint}\n\n"
+            "RULES:\n"
+            "- Bold: **server names**, **key numbers**.\n"
+            "- Timestamps: YYYY-MM-DD HH:MM.\n"
+            "- Under 200 words.\n"
+            "- No preamble."
         )
         reply = _teams_groq(
             f"Question: {text}\n\nDatabase results:\n{data_text}",
             system=fmt_system,
-            max_tokens=500
+            max_tokens=400
         )
         return reply or "No response from model."
     except Exception as e:
