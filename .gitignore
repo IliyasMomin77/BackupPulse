@@ -17,10 +17,9 @@ venv/
 .venv/
 env/
 
-# ── Personal / internal docs ─────────────────────────────────
+# ── Personal / internal docs & presentation files ────────────
 PROJECT_EXPLAINED.md
-create_ppt.py
-*.pptx
+documents/
 
 # ── OS junk ──────────────────────────────────────────────────
 .DS_Store
