@@ -69,6 +69,15 @@ def _load_config():
 _load_config()
 
 app = Flask(__name__)
+
+@app.after_request
+def _add_cors(response):
+    # Restrict to localhost for demo; tighten to specific domain in production
+    response.headers["Access-Control-Allow-Origin"]  = "http://127.0.0.1:5000"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
 log.info(f"[STARTUP] provider={os.getenv('MODEL_PROVIDER','?')} port={os.getenv('FLASK_PORT','5000')} db={os.getenv('DB_NAME','?')}")
 
 # Remarks store — persisted to remarks.json so restarts don't lose them
@@ -94,6 +103,7 @@ def _log_incident_resolution(description: str, resolution: str):
                 "resolution":  resolution,
                 "resolved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }, ensure_ascii=False) + '\n')
+        _trim_jsonl(_INCIDENTS_LOG, max_bytes=5_242_880, keep_lines=1000)
         log.info(f"[INCIDENTS] resolution logged")
     except Exception as exc:
         log.warning(f"[INCIDENTS] write failed: {exc}")
@@ -200,6 +210,8 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 AWS_REGION            = os.getenv("AWS_REGION", "ap-south-1")
 BEDROCK_MODEL         = os.getenv("BEDROCK_MODEL", "meta.llama3-1-8b-instruct-v1:0")
 BEDROCK_GUARDRAIL_ID  = os.getenv("BEDROCK_GUARDRAIL_ID", "")
+if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+    log.warning("[CONFIG] AWS keys are blank — Bedrock provider will fail if selected. Add keys to config_final.env and run encrypt_config.py.")
 
 
 # Known selectable models per provider (shown in the UI dropdown)
@@ -296,8 +308,6 @@ else:
 
 def load_system_prompt(): return _SYSTEM_PROMPT
 def load_sql_prompt():    return _SQL_PROMPT
-_TEAMS_SQL_PROMPT = _load_file("sql_prompt_teams.txt", "Return a PostgreSQL SELECT query only.")
-def load_teams_sql_prompt(): return _TEAMS_SQL_PROMPT
 
 # ============================================================
 # LLM
@@ -439,6 +449,18 @@ _INSTANT_REPLY = re.compile(
 
 
 
+def _trim_jsonl(path, max_bytes=10_485_760, keep_lines=5000):
+    """Keep JSONL files under max_bytes by trimming oldest entries."""
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > max_bytes:
+            with open(path, encoding='utf-8') as f:
+                lines = f.readlines()
+            with open(path, 'w', encoding='utf-8') as f:
+                f.writelines(lines[-keep_lines:])
+    except Exception:
+        pass
+
+
 def _log_teams_qa(question, answer, duration):
     entry = {
         "ts":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -448,8 +470,10 @@ def _log_teams_qa(question, answer, duration):
         "duration": duration,
     }
     try:
-        with open(os.path.join(_log_dir, 'teams_qa.jsonl'), 'a', encoding='utf-8') as f:
+        path = os.path.join(_log_dir, 'teams_qa.jsonl')
+        with open(path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+        _trim_jsonl(path)
     except Exception as exc:
         log.warning(f"[TEAMS QA LOG] write failed: {exc}")
 
@@ -470,9 +494,12 @@ def _log_qa(question, answer, duration, provider, sql=None, row_count=None):
         qa_file = os.path.join(_log_dir, 'qa.jsonl')
         with open(qa_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+        _trim_jsonl(qa_file)
     except Exception as exc:
         log.warning(f"[QA LOG] write failed: {exc}")
 
+
+_TEST_KEYWORDS = ("test", "testing", "ignore", "dummy", "fake", "sample", "trial")
 
 _SNOW_TRIGGER = re.compile(
     r'\b(create|raise|open|log|file)\s+(im|incident|ticket|inc)\b',
@@ -592,7 +619,7 @@ def process_question(question):
             inc_data = json.loads(m.group()) if m else {}
             short_desc = inc_data.get("short_description") or question[:100]
             description = inc_data.get("description") or question
-            urgency     = int(inc_data.get("urgency", 2))
+            urgency     = max(1, min(3, int(inc_data.get("urgency", 2))))
             urgency_label = {1: "Critical", 2: "High", 3: "Medium"}.get(urgency, "High")
 
             inc_number, inc_url = create_snow_incident(short_desc, description, urgency=urgency)
@@ -867,7 +894,7 @@ def create_incident_route():
     data        = request.get_json()
     short_desc  = data.get("short_description", data.get("description", "")).strip()[:100]
     description = data.get("description", short_desc).strip()
-    urgency     = int(data.get("urgency", 2))
+    urgency     = max(1, min(3, int(data.get("urgency", 2))))
     if not short_desc:
         return jsonify({"error": "Short description required"}), 400
     urgency_label = {1: "Critical", 2: "High", 3: "Medium"}.get(urgency, "High")
@@ -978,7 +1005,6 @@ def resolve_incident_route():
     log.info(f"[ROUTE /resolve-incident] {inc_number} code={resolution_code!r}")
     try:
         inc_number, description = resolve_snow_incident(inc_number, resolution_code, resolution_notes)
-        _TEST_KEYWORDS = ("test", "testing", "ignore", "dummy", "fake", "sample", "trial")
         is_test = any(kw in resolution_notes.lower() for kw in _TEST_KEYWORDS)
         if not is_test:
             _log_incident_resolution(description or inc_number, resolution_notes)
@@ -1356,17 +1382,20 @@ def _process_teams_message(text):
         data_text = "\n".join(data_lines)
 
         # Step 4: Same system_prompt.txt as chatbot + Teams length cap
+        # FIX #1: scrub PCI data from Teams text before sending to format LLM
+        safe_text, _ = pci_scrub(text)
         fmt_system = (
             load_system_prompt()
             + "\n\nNote: This reply is for Microsoft Teams — keep it under 200 words."
         )
         reply = _teams_groq(
-            f"Question: {text}\n\nDatabase results:\n{data_text}",
+            f"Question: {safe_text}\n\nDatabase results:\n{data_text}",
             system=fmt_system,
             max_tokens=400
         )
         reply = reply or "No response from model."
-        _log_teams_qa(text, reply, round(time.perf_counter() - t_start, 3))
+        # FIX #7: log scrubbed text, not raw user input
+        _log_teams_qa(safe_text, reply, round(time.perf_counter() - t_start, 3))
         return reply
     except Exception as e:
         log.error(f"[TEAMS] fallback error: {e}")
