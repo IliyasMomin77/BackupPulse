@@ -148,12 +148,12 @@ def _inject_past_fixes(reply: str, err_to_fix: dict) -> str:
     for line in lines:
         result.append(line)
         line_lower = line.lower()
-        for err, cleaned_fix in err_to_fix.items():
-            # LLM abbreviates errors — use specific words (>5 chars), 1 match is enough
-            keywords = [w.strip('.,;:()') for w in err.lower().split() if len(w.strip('.,;:()')) > 5]
-            if keywords and any(kw in line_lower for kw in keywords):
-                result.append(f"  → Past fix: {cleaned_fix}")
-                break
+        if '❌' in line:  # only inject on actual failure lines, not summary sentences
+            for err, cleaned_fix in err_to_fix.items():
+                keywords = [w.strip('.,;:()') for w in err.lower().split() if len(w.strip('.,;:()')) > 5]
+                if keywords and any(kw in line_lower for kw in keywords):
+                    result.append(f"  → Past fix: {cleaned_fix}")
+                    break
     return '\n'.join(result)
 
 
@@ -296,6 +296,8 @@ else:
 
 def load_system_prompt(): return _SYSTEM_PROMPT
 def load_sql_prompt():    return _SQL_PROMPT
+_TEAMS_SQL_PROMPT = _load_file("sql_prompt_teams.txt", "Return a PostgreSQL SELECT query only.")
+def load_teams_sql_prompt(): return _TEAMS_SQL_PROMPT
 
 # ============================================================
 # LLM
@@ -435,6 +437,21 @@ _INSTANT_REPLY = re.compile(
     re.IGNORECASE
 )
 
+
+
+def _log_teams_qa(question, answer, duration):
+    entry = {
+        "ts":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "channel":  "teams",
+        "question": question,
+        "answer":   answer,
+        "duration": duration,
+    }
+    try:
+        with open(os.path.join(_log_dir, 'teams_qa.jsonl'), 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    except Exception as exc:
+        log.warning(f"[TEAMS QA LOG] write failed: {exc}")
 
 
 def _log_qa(question, answer, duration, provider, sql=None, row_count=None):
@@ -665,9 +682,20 @@ def process_question(question):
                                 )
                                 if raw_res:
                                     err_to_fix[err] = _clean_resolution(raw_res)
+                    # Python pre-counts so LLM never estimates
+                    keys_r = list(rows[0].keys()) if rows else []
+                    facts = ""
+                    if "object_name" in keys_r and "failed_object_name" not in keys_r:
+                        u = len({r.get("object_name") for r in rows if r.get("object_name")})
+                        facts = f"\n\n[FACTS]\nDistinct objects in result: {u}"
+                    elif "failed_object_name" in keys_r:
+                        u = len({r.get("failed_object_name") for r in rows if r.get("failed_object_name")})
+                        v = len({r.get("vbr_server") for r in rows if r.get("vbr_server")})
+                        facts = f"\n\n[FACTS]\nDistinct failed objects: {u} | VBR servers affected: {v}"
                     # LLM formats errors only — Python handles fix placement
                     explain_prompt = (
                         "[QUERY RESULTS]\n" + sql + "\n" + str(rows[:50])
+                        + facts
                         + "\n\n[USER QUESTION]\n" + question
                     )
                     reply = call_llm(explain_prompt, load_system_prompt(), max_tokens=800)
@@ -1098,8 +1126,8 @@ def _verify_teams_hmac(auth_header, body_bytes):
 
 
 def _teams_groq(prompt, system=None, max_tokens=400):
-    """Always call Groq for Teams — independent of the global MODEL_PROVIDER."""
-    return call_openai_compatible(prompt, system, GROQ_URL, GROQ_API_KEY, GROQ_MODEL, max_tokens)
+    """Call LLM for Teams using the active MODEL_PROVIDER — same as chatbot."""
+    return call_llm(prompt, system, max_tokens)
 
 
 def _run_query_params(sql, params=()):
@@ -1131,6 +1159,12 @@ _TEAMS_SKIP_WORDS = {
     "successful", "successfully", "failed", "fine", "okay", "ok",
     "when", "where", "which", "like", "just", "now", "were", "been",
     "run", "ran", "working", "complete", "completed", "job", "jobs",
+    "added", "registered", "tell", "give", "about", "me", "us", "our",
+    "today", "yesterday", "currently", "currently", "details", "detail",
+    "object", "objects", "agent", "agents", "file", "info", "information",
+    "team", "teams", "help", "want", "need", "see", "show", "get",
+    "that", "their", "there", "they", "these", "those", "are", "been",
+    "will", "would", "could", "should", "also", "and", "but", "then",
 }
 
 
@@ -1233,20 +1267,42 @@ def _process_teams_message(text):
 
     elif re.search(r'\b(list|all|show)\b.{0,30}\b(server|vm|agent|object|protected)\b', q):
         pat = machine or ""
-        intent  = LIST_VMS["intent"] + (f" Filter by name pattern: {pat}" if pat else " Return all.")
-        fmt_hint = LIST_VMS["format"].replace("<pattern>", pat or "all")
+        obj_type = "VM" if re.search(r'\bvm\b', q, re.IGNORECASE) else \
+                   "Agent" if re.search(r'\bagent\b', q, re.IGNORECASE) else ""
+        intent  = LIST_VMS["intent"]
+        if pat:
+            intent += f" Filter by name pattern containing: {pat}."
+        if obj_type:
+            intent += f" Filter object_type = '{obj_type}'."
+        if not pat and not obj_type:
+            intent += " Return all objects with no filter."
+        fmt_hint = (
+            f"List all protected {'VMs' if obj_type == 'VM' else 'objects'} "
+            f"{'matching ' + pat if pat else ''} grouped by job name.\n"
+            "Format: **JobName** (VBR server): **Object1**, **Object2**, ...\n"
+            "End with: Total: N object(s) across X job(s)."
+        )
 
     else:
         intent   = "Answer the user's backup-related question using the relevant tables."
         fmt_hint = "Answer directly, one line per item, bold key values."
 
-    # Build SQL prompt with intent context
+    # Build SQL prompt with intent context — same proven sql_prompt.txt as chatbot
     sql_system = f"[QUERY INTENT]\n{intent}\n\n" + load_sql_prompt()
 
+    t_start = time.perf_counter()
     try:
         # Step 1: LLM generates SQL with intent context
-        raw = _teams_groq(text, system=sql_system, max_tokens=400)
+        raw = _teams_groq(text, system=sql_system, max_tokens=350)
         sql_clean = re.sub(r"```sql|```", "", raw or "").strip()
+
+        # Handle DIRECT: knowledge answers gracefully instead of falling to help()
+        if sql_clean.upper().startswith("DIRECT:"):
+            direct_reply = sql_clean[7:].strip()
+            log.info(f"[TEAMS] DIRECT answer returned")
+            _log_teams_qa(text, direct_reply, round(time.perf_counter() - t_start, 3))
+            return direct_reply
+
         m = re.search(r"(SELECT\b[^;]+;?)", sql_clean, re.IGNORECASE | re.DOTALL)
         sql_clean = m.group(1).strip() if m else ""
         if not sql_clean:
@@ -1257,9 +1313,10 @@ def _process_teams_message(text):
         # Step 2: Execute SQL
         rows = run_query(sql_clean)
         if not rows:
+            _log_teams_qa(text, "No data found for that query.", round(time.perf_counter() - t_start, 3))
             return "No data found for that query."
 
-        # Step 3: Build data — Python pre-calculates facts so LLM only formats
+        # Step 3: Build data — Python pre-calculates facts so LLM never counts itself
         keys = list(rows[0].keys())
         data_lines = []
         if "failed_object_name" in keys:
@@ -1270,6 +1327,9 @@ def _process_teams_message(text):
                 f"Jobs failed: {len(unique_jobs)} ({', '.join(unique_jobs)})\n"
                 f"Objects affected: {len(unique_objects)} ({', '.join(unique_objects)})"
             )
+        elif "object_name" in keys and "failed_object_name" not in keys:
+            u = len({r.get("object_name") for r in rows if r.get("object_name")})
+            data_lines.append(f"[FACTS — use this exact number]\nDistinct objects in result: {u}")
         elif "sla_pct" in keys or "total_protected" in keys:
             r0 = rows[0]
             total  = int(r0.get("total_protected") or 0)
@@ -1281,30 +1341,33 @@ def _process_teams_message(text):
                 f"SLA: {sla}% {emoji}\n"
                 f"Protected: {total} | Successful: {total - failed} | Failed: {failed}"
             )
+        # Deduplicate rows before passing to format LLM to prevent hallucination of extra items
+        seen_rows, deduped = set(), []
+        for r in rows:
+            key = tuple(str(r.get(k, "")) for k in keys)
+            if key not in seen_rows:
+                seen_rows.add(key)
+                deduped.append(r)
         data_lines.append(", ".join(keys))
-        for r in rows[:40]:
+        for r in deduped[:40]:
             data_lines.append(", ".join(str(r.get(k, "")) for k in keys))
-        if len(rows) > 40:
-            data_lines.append(f"({len(rows) - 40} more rows not shown)")
+        if len(deduped) > 40:
+            data_lines.append(f"({len(deduped) - 40} more rows not shown)")
         data_text = "\n".join(data_lines)
 
-        # Step 4: LLM formats with intent-specific format hint
+        # Step 4: Same system_prompt.txt as chatbot + Teams length cap
         fmt_system = (
-            "You are BackupPulse, a Veeam Backup & Replication assistant in Microsoft Teams.\n\n"
-            "CRITICAL: Use ONLY data explicitly in 'Database results'. Never invent names, counts, or errors.\n\n"
-            f"FORMAT FOR THIS QUERY TYPE:\n{fmt_hint}\n\n"
-            "RULES:\n"
-            "- Bold: **server names**, **key numbers**.\n"
-            "- Timestamps: YYYY-MM-DD HH:MM.\n"
-            "- Under 200 words.\n"
-            "- No preamble."
+            load_system_prompt()
+            + "\n\nNote: This reply is for Microsoft Teams — keep it under 200 words."
         )
         reply = _teams_groq(
             f"Question: {text}\n\nDatabase results:\n{data_text}",
             system=fmt_system,
             max_tokens=400
         )
-        return reply or "No response from model."
+        reply = reply or "No response from model."
+        _log_teams_qa(text, reply, round(time.perf_counter() - t_start, 3))
+        return reply
     except Exception as e:
         log.error(f"[TEAMS] fallback error: {e}")
         return "Sorry, I couldn't process that. Type *help* to see what I can do."

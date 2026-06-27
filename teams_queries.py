@@ -65,10 +65,11 @@ SLA_REPORT = {
 }
 
 LIST_VMS = {
-    "intent": "List protected objects from protected_vms matching the given name pattern, including object_type and job_name.",
+    "intent": "List distinct protected objects from protected_vms. Include object_name, object_type, job_name, vbr_server. No LIMIT unless a specific count is requested. Use SELECT DISTINCT object_name, object_type, job_name, vbr_server FROM protected_vms.",
     "format": (
-        "**Protected objects matching '<pattern>' (N found):**\n"
-        "• **ObjectName** (Type) — JobName"
+        "Group by job_name:\n"
+        "**JobName** (VBR): **Object1**, **Object2**, ...\n"
+        "End with total count."
     ),
 }
 
