@@ -5,7 +5,9 @@ config_final.env
 # ── Runtime data ─────────────────────────────────────────────
 logs/
 remarks.json
-CLAUDE.md
+
+# ── Claude session context — local only, never commit ────────
+.claude/
 
 # ── Python cache ─────────────────────────────────────────────
 __pycache__/

@@ -138,15 +138,40 @@ def _find_past_resolution(error_text: str) -> str | None:
 
 
 def _clean_resolution(raw: str) -> str:
-    """LLM rewrites a raw resolution note into clean English — one sentence."""
+    """LLM rewrites a raw resolution note into clean English — one sentence, no preamble."""
     try:
         cleaned = call_llm(
-            f"Rewrite this in clear professional English, one sentence, fix spelling and grammar: {raw}",
+            "Rewrite the following as ONE clean sentence, fixed grammar/spelling. "
+            "Output ONLY the rewritten sentence — no preamble, no \"Here is...\", "
+            "no quotes around it, nothing else.\n\n" + raw,
             max_tokens=80
         )
-        return cleaned.strip().rstrip('.')  + '.' if cleaned else raw
+        if not cleaned:
+            return raw
+        cleaned = cleaned.strip().strip('"').strip()
+        # Strip common meta-commentary preambles some models add despite instructions
+        cleaned = re.sub(
+            r'^(here(\'?s| is)( a)?( rewritten)?( version)?( of)?( the)?( sentence)?'
+            r'( in)?( clear)?( professional)?( english)?:?\s*)',
+            '', cleaned, flags=re.IGNORECASE
+        ).strip().strip('"').strip()
+        return cleaned.rstrip('.') + '.' if cleaned else raw
     except Exception:
         return raw
+
+
+def _fix_sql_safety(sql: str) -> str:
+    """
+    Patch common LLM SQL mistakes before execution. Shared by chatbot and Teams bot
+    so both get the same fixes — no per-path drift.
+    """
+    # SELECT DISTINCT + ORDER BY on a column not in the SELECT list (PostgreSQL error)
+    if re.search(r'\bSELECT\s+DISTINCT\b', sql, re.IGNORECASE):
+        sql = re.sub(r'\bSELECT\s+DISTINCT\b', 'SELECT', sql, count=1, flags=re.IGNORECASE)
+    # Asymmetric LOWER(): "column = LOWER('x')" only lowers one side, breaks the match
+    # against mixed-case data like 'WApp03'. Wrap the column side too.
+    sql = re.sub(r'\b([a-zA-Z_][a-zA-Z0-9_.]*)\s*=\s*LOWER\(', r'LOWER(\1) = LOWER(', sql)
+    return sql
 
 
 def _inject_past_fixes(reply: str, err_to_fix: dict) -> str:
@@ -165,6 +190,87 @@ def _inject_past_fixes(reply: str, err_to_fix: dict) -> str:
                     result.append(f"  → Past fix: {cleaned_fix}")
                     break
     return '\n'.join(result)
+
+
+def _build_facts(rows: list) -> str:
+    """
+    Pre-calculate exact counts/breakdowns from DB rows so the LLM never estimates
+    or hallucinates numbers. Shared by chatbot and Teams bot — keeps both answers
+    consistent since they read the same FACTS block regardless of which path ran.
+    """
+    if not rows:
+        return ""
+    keys = list(rows[0].keys())
+
+    if "failed_object_name" in keys:
+        unique_objects = sorted({r.get("failed_object_name", "") for r in rows if r.get("failed_object_name")})
+        unique_jobs    = sorted({r.get("job_name", "")            for r in rows if r.get("job_name")})
+        return (
+            f"[FACTS — use these exact numbers]\n"
+            f"Jobs failed: {len(unique_jobs)} ({', '.join(unique_jobs)})\n"
+            f"Objects affected: {len(unique_objects)} ({', '.join(unique_objects)})"
+        )
+
+    if "object_name" in keys and "object_type" in keys:
+        # Both present — compute per-type breakdown, not just a flat total
+        seen = {}
+        for r in rows:
+            name = r.get("object_name")
+            if name and name not in seen:
+                seen[name] = r.get("object_type", "Unknown")
+        from collections import Counter
+        breakdown = Counter(seen.values())
+        total = len(seen)
+        breakdown_str = ", ".join(f"{k}: {v}" for k, v in sorted(breakdown.items()))
+        return (
+            f"[FACTS — use these exact numbers, do not estimate the breakdown]\n"
+            f"Total distinct objects: {total}\nBreakdown by type: {breakdown_str}"
+        )
+
+    if "object_name" in keys:
+        u = len({r.get("object_name") for r in rows if r.get("object_name")})
+        return f"[FACTS — use this exact number]\nDistinct objects in result: {u}"
+
+    if "object_type" in keys:
+        # Group-by-type aggregate (e.g. protected count breakdown) — sum in Python, never let LLM add
+        count_key = next(
+            (k for k in keys if k != "object_type"
+             and all(str(r.get(k, "")).strip().lstrip('-').isdigit() for r in rows)),
+            None
+        )
+        if count_key:
+            breakdown = {r["object_type"]: int(r[count_key]) for r in rows}
+            total = sum(breakdown.values())
+            breakdown_str = ", ".join(f"{k}: {v}" for k, v in breakdown.items())
+            return f"[FACTS — use these exact numbers]\nTotal: {total}\nBreakdown: {breakdown_str}"
+
+    if "duration_minutes" in keys:
+        # job_sessions-shaped rows (long-running jobs etc.) — no object_name/object_type
+        unique_jobs = sorted({r.get("job_name", "") for r in rows if r.get("job_name")})
+        return (
+            f"[FACTS — use these exact numbers]\n"
+            f"Total instances/rows: {len(rows)}\n"
+            f"Distinct job names: {len(unique_jobs)} ({', '.join(unique_jobs)})"
+        )
+
+    if "sla_pct" in keys or "total_protected" in keys:
+        r0 = rows[0]
+        total = int(r0.get("total_protected") or 0)
+        # LLM aliases the failed-count column differently each time — check known variants
+        failed_key = next(
+            (k for k in ("total_failed", "failed_today", "failed", "sla_missed", "missed")
+             if k in keys), None
+        )
+        failed = int(r0.get(failed_key) or 0) if failed_key else 0
+        sla    = float(r0.get("sla_pct") or 0)
+        emoji  = "✅" if sla >= 95 else "⚠️" if sla >= 85 else "🔴"
+        return (
+            f"[FACTS — use these exact numbers]\n"
+            f"SLA: {sla}% {emoji}\n"
+            f"Protected: {total} | Successful: {total - failed} | Failed: {failed}"
+        )
+
+    return ""
 
 
 # ============================================================
@@ -688,8 +794,7 @@ def process_question(question):
                 log.warning(f"[CHAT] blocked write SQL attempt — {sql[:80]}")
                 reply = "I can only read backup data. Write operations are not allowed."
             else:
-                if re.search(r'\bSELECT\s+DISTINCT\b', sql, re.IGNORECASE):
-                    sql = re.sub(r'\bSELECT\s+DISTINCT\b', 'SELECT', sql, count=1, flags=re.IGNORECASE)
+                sql = _fix_sql_safety(sql)
                 rows = run_query(sql)
                 if not rows:
                     log.info(f"[CHAT] query returned 0 rows — {round(time.perf_counter()-t0,3)}s")
@@ -709,20 +814,12 @@ def process_question(question):
                                 )
                                 if raw_res:
                                     err_to_fix[err] = _clean_resolution(raw_res)
-                    # Python pre-counts so LLM never estimates
-                    keys_r = list(rows[0].keys()) if rows else []
-                    facts = ""
-                    if "object_name" in keys_r and "failed_object_name" not in keys_r:
-                        u = len({r.get("object_name") for r in rows if r.get("object_name")})
-                        facts = f"\n\n[FACTS]\nDistinct objects in result: {u}"
-                    elif "failed_object_name" in keys_r:
-                        u = len({r.get("failed_object_name") for r in rows if r.get("failed_object_name")})
-                        v = len({r.get("vbr_server") for r in rows if r.get("vbr_server")})
-                        facts = f"\n\n[FACTS]\nDistinct failed objects: {u} | VBR servers affected: {v}"
+                    # Python pre-counts so LLM never estimates — shared with Teams bot
+                    facts = _build_facts(rows)
                     # LLM formats errors only — Python handles fix placement
                     explain_prompt = (
                         "[QUERY RESULTS]\n" + sql + "\n" + str(rows[:50])
-                        + facts
+                        + (f"\n\n{facts}" if facts else "")
                         + "\n\n[USER QUESTION]\n" + question
                     )
                     reply = call_llm(explain_prompt, load_system_prompt(), max_tokens=800)
@@ -928,6 +1025,9 @@ def list_incidents_route():
         )
         if not r.ok:
             return jsonify({"error": f"SNOW error {r.status_code}"}), 500
+        if "application/json" not in r.headers.get("Content-Type", ""):
+            log.error("[ROUTE /list-incidents] SNOW returned non-JSON — instance may be hibernating/asleep")
+            return jsonify({"error": "ServiceNow instance unreachable or asleep — check it's awake in browser first"}), 502
         items = []
         for rec in r.json().get("result", []):
             items.append({
@@ -1246,8 +1346,8 @@ def _process_teams_message(text):
 
     # Scope gate
     if not re.search(
-        r'\b(fail|failed|failure|protected|protection|backup|sla|compliance|'
-        r'how many|how much|count|server|vm|agent|object|status|'
+        r'\b(fail(s|ed|ure)?|protect(ed|ion)?|backup|sla|compliance|'
+        r'how many|how much|count|servers?|vms?|agents?|objects?|status|'
         r'last|recent|latest|today|24|yesterday|list|all)\b', q, re.IGNORECASE
     ):
         return "I handle backup questions only. For detailed analysis use the **BackupPulse dashboard**."
@@ -1281,20 +1381,21 @@ def _process_teams_message(text):
         intent   = SLA_REPORT["intent"] + f" Time period: {window}."
         fmt_hint = SLA_REPORT["format"]
 
-    elif re.search(r'\bhow\s+many\b.{0,30}\b(server|vm|agent|object|protected)\b'
-                   r'|\b(count|total)\b.{0,30}\b(server|vm|protected)\b'
-                   r'|\bhow\s+many\s+are\s+protected\b', q):
+    elif re.search(r'\bhow\s+many\b.*\b(servers?|vms?|agents?|objects?|protected)\b'
+                   r'|\b(count|total)\b.*\b(servers?|vms?|protected)\b'
+                   r'|\bhow\s+many\s+are\s+protected\b'
+                   r'|\bvs\b.*\b(agents?|servers?)\b', q):
         intent  = PROTECTED_COUNT["intent"]
         fmt_hint = PROTECTED_COUNT["format"]
 
-    elif re.search(r'\b(fail|failed|failure|job)\b', q):
+    elif re.search(r'\b(fails?|failed|failure)\b', q):
         intent  = FAILED_JOBS["intent"]
         fmt_hint = FAILED_JOBS["format"]
 
-    elif re.search(r'\b(list|all|show)\b.{0,30}\b(server|vm|agent|object|protected)\b', q):
+    elif re.search(r'\b(list|all|show)\b.{0,30}\b(servers?|vms?|agents?|objects?|protected)\b', q):
         pat = machine or ""
-        obj_type = "VM" if re.search(r'\bvm\b', q, re.IGNORECASE) else \
-                   "Agent" if re.search(r'\bagent\b', q, re.IGNORECASE) else ""
+        obj_type = "VM" if re.search(r'\bvms?\b', q, re.IGNORECASE) else \
+                   "Agent" if re.search(r'\bagents?\b', q, re.IGNORECASE) else ""
         intent  = LIST_VMS["intent"]
         if pat:
             intent += f" Filter by name pattern containing: {pat}."
@@ -1310,8 +1411,11 @@ def _process_teams_message(text):
         )
 
     else:
-        intent   = "Answer the user's backup-related question using the relevant tables."
-        fmt_hint = "Answer directly, one line per item, bold key values."
+        # No defined intent matched — Teams only answers its specific known question
+        # types (status, last backup, SLA, protected count, failed jobs, list objects).
+        # Everything else (repo capacity, long-running jobs, zero-size jobs, restore
+        # points, etc.) is Chat-only by design — redirect instead of guessing.
+        return "I can't answer that here. For detailed analysis use the **BackupPulse dashboard**."
 
     # Build SQL prompt with intent context — same proven sql_prompt.txt as chatbot
     sql_system = f"[QUERY INTENT]\n{intent}\n\n" + load_sql_prompt()
@@ -1333,8 +1437,7 @@ def _process_teams_message(text):
         sql_clean = m.group(1).strip() if m else ""
         if not sql_clean:
             return _teams_help()
-        if re.search(r'\bSELECT\s+DISTINCT\b', sql_clean, re.IGNORECASE):
-            sql_clean = re.sub(r'\bSELECT\s+DISTINCT\b', 'SELECT', sql_clean, count=1, flags=re.IGNORECASE)
+        sql_clean = _fix_sql_safety(sql_clean)
 
         # Step 2: Execute SQL
         rows = run_query(sql_clean)
@@ -1342,31 +1445,10 @@ def _process_teams_message(text):
             _log_teams_qa(text, "No data found for that query.", round(time.perf_counter() - t_start, 3))
             return "No data found for that query."
 
-        # Step 3: Build data — Python pre-calculates facts so LLM never counts itself
+        # Step 3: Build data — same shared facts builder the chatbot uses
         keys = list(rows[0].keys())
-        data_lines = []
-        if "failed_object_name" in keys:
-            unique_objects = sorted({r.get("failed_object_name", "") for r in rows if r.get("failed_object_name")})
-            unique_jobs    = sorted({r.get("job_name", "")            for r in rows if r.get("job_name")})
-            data_lines.append(
-                f"[FACTS — use these exact numbers]\n"
-                f"Jobs failed: {len(unique_jobs)} ({', '.join(unique_jobs)})\n"
-                f"Objects affected: {len(unique_objects)} ({', '.join(unique_objects)})"
-            )
-        elif "object_name" in keys and "failed_object_name" not in keys:
-            u = len({r.get("object_name") for r in rows if r.get("object_name")})
-            data_lines.append(f"[FACTS — use this exact number]\nDistinct objects in result: {u}")
-        elif "sla_pct" in keys or "total_protected" in keys:
-            r0 = rows[0]
-            total  = int(r0.get("total_protected") or 0)
-            failed = int(r0.get("total_failed") or 0)
-            sla    = float(r0.get("sla_pct") or 0)
-            emoji  = "✅" if sla >= 95 else "⚠️" if sla >= 85 else "🔴"
-            data_lines.append(
-                f"[FACTS — use these exact numbers]\n"
-                f"SLA: {sla}% {emoji}\n"
-                f"Protected: {total} | Successful: {total - failed} | Failed: {failed}"
-            )
+        facts = _build_facts(rows)
+        data_lines = [facts] if facts else []
         # Deduplicate rows before passing to format LLM to prevent hallucination of extra items
         seen_rows, deduped = set(), []
         for r in rows:

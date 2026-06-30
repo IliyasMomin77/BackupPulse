@@ -22,6 +22,14 @@ TABLE: failed_jobs_daily
 Purpose: One row per object that failed in a backup job on a given date.
 Every row in this table represents a failure — there is NO status column here.
 
+CRITICAL — TABLE SELECTION RULE:
+"Recent failed jobs", "which jobs failed", "what failed today/this week", "show failures"
+→ ALWAYS use failed_jobs_daily. This is the ONLY correct table for failed-backup questions
+  because it has failed_object_name (the specific VM/server that failed).
+→ NEVER use job_sessions for this, even though job_sessions has status='Failed' rows.
+  job_sessions has NO object names — using it produces job-level info with no way to
+  name which specific VM failed. Always prefer failed_jobs_daily for failure queries.
+
 Columns:
   backup_date          DATE       — the calendar date the failure occurred
   vbr_server           TEXT       — which VBR server ran the job (e.g. VBR1, VBR2, VBR3)
@@ -51,6 +59,22 @@ Columns:
 
 CRITICAL: The same object_name appears multiple times if it is included in more than one job.
   - ALWAYS use COUNT(DISTINCT object_name) when counting protected servers/VMs.
+
+CRITICAL — "server"/"object"/"machine" word choice does NOT imply a type filter:
+  When the user asks "how many servers/objects/machines are protected" WITHOUT naming a
+  specific type, count ALL THREE object_types together — VM, Agent, AND File Server.
+  Do NOT silently restrict to WHERE object_type IN ('VM','Agent') — File Server/NAS objects
+  are also "servers" and must be included. Only filter by type when the user explicitly says
+  "VMs only", "just agents", "file servers", etc.
+  Correct:   SELECT COUNT(DISTINCT object_name) FROM protected_vms   -- no WHERE, counts all types
+  Wrong:     SELECT COUNT(DISTINCT object_name) FROM protected_vms WHERE object_type IN ('VM','Agent')
+
+  If the user asks for a BREAKDOWN or COMPARISON by type — phrases like "VMs vs Agents
+  vs File Servers", "how many of each type", "breakdown by type", "split by type" —
+  you MUST GROUP BY object_type and return one row per type, not a single flat total:
+  SELECT object_type, COUNT(DISTINCT object_name) FROM protected_vms GROUP BY object_type
+  A flat COUNT(*) with no GROUP BY cannot answer a "vs"/breakdown question — it only
+  answers "how many total", which is a different question.
   - ALWAYS use SELECT DISTINCT object_name when listing protected servers/VMs.
   - Using COUNT(*) or COUNT(object_name) returns inflated numbers.
 
@@ -134,10 +158,27 @@ A job that keeps failing with no successful retry has an old last_successful_bac
 SLA has two calculation modes depending on time period:
 
 TODAY's SLA — use failed_jobs_daily:
-  total_protected = COUNT(DISTINCT object_name) FROM protected_vms
-  failed_today    = COUNT(DISTINCT failed_object_name) FROM failed_jobs_daily WHERE backup_date = CURRENT_DATE
+  total_protected = COUNT(DISTINCT object_name) FROM protected_vms — NO WHERE clause on
+                     protected_vms at all. Count every protected object regardless of
+                     its last_successful_backup value. Do not filter protected_vms by
+                     date for "today" SLA — that belongs only to the weekly/monthly mode.
+  failed_today    = COUNT(DISTINCT failed_object_name) FROM failed_jobs_daily WHERE
+                     backup_date = CURRENT_DATE.
   in_sla          = total_protected - failed_today
   sla_pct         = ROUND(100.0 * in_sla / NULLIF(total_protected, 0), 1)
+
+  CRITICAL JOIN RULE: if you compute this with a single query that LEFT JOINs
+  protected_vms to failed_jobs_daily, the backup_date = CURRENT_DATE condition MUST
+  go inside the ON clause of the LEFT JOIN, never in a separate WHERE clause.
+  Putting a filter on the right-hand table in WHERE silently turns a LEFT JOIN into
+  an INNER JOIN — every protected object with no failure today gets dropped entirely,
+  making total_protected wrong (it will equal failed_today instead of the real total).
+  Correct:  LEFT JOIN failed_jobs_daily f ON LOWER(p.object_name)=LOWER(f.failed_object_name)
+            AND f.backup_date = CURRENT_DATE
+  Wrong:    LEFT JOIN failed_jobs_daily f ON LOWER(p.object_name)=LOWER(f.failed_object_name)
+            WHERE f.backup_date = CURRENT_DATE
+  Safer alternative: compute total_protected and failed_today as two separate
+  subqueries/CTEs instead of one JOIN, to avoid this mistake entirely.
 
 WEEKLY / MONTHLY SLA — use protected_vms.last_successful_backup:
   in_sla   = DISTINCT objects where last_successful_backup >= CURRENT_DATE - N
